@@ -133,8 +133,7 @@ input[type="range"]:hover::-webkit-slider-thumb { background:var(--accent); }
 /* PRESETS */
 .presets-section { margin-top:40px; }
 .presets-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:12px; }
-.preset-card { background:var(--white); border:1px solid var(--border); border-radius:var(--radius); padding:18px; cursor:pointer; transition:all .15s; position:relative; overflow:hidden; opacity:0; transform:translateY(14px); }
-.preset-card.visible { animation:fadeUp .4s cubic-bezier(.22,.68,0,1.2) forwards; }
+.preset-card { background:var(--white); border:1px solid var(--border); border-radius:var(--radius); padding:18px; cursor:pointer; transition:all .15s; position:relative; overflow:hidden; }
 .preset-card:hover { border-color:var(--accent); transform:translateY(-2px) !important; box-shadow:0 8px 24px rgba(0,0,0,.08); }
 .preset-card.featured-preset { border-color:rgba(255,77,28,.3); background:linear-gradient(135deg,rgba(255,77,28,.04),var(--white)); }
 .preset-badge { position:absolute; top:10px; right:10px; font-size:9px; font-weight:800; text-transform:uppercase; letter-spacing:.06em; padding:2px 7px; border-radius:100px; background:var(--accent); color:white; }
@@ -498,12 +497,12 @@ function loadFile(f) {
   setTimeout(() => {
     const ctrl = document.getElementById('editorControls');
     if (ctrl) ctrl.classList.add('visible');
-    // Stagger preset cards
+    // Animate preset cards in with a stagger
     setTimeout(() => {
       document.querySelectorAll('.preset-card').forEach((card, i) => {
-        setTimeout(() => { card.style.animationDelay = i*0.04+'s'; card.classList.add('visible'); }, i*45);
+        card.style.animation = `fadeUp .4s ${i*0.04}s cubic-bezier(.22,.68,0,1.2) both`;
       });
-    }, 250);
+    }, 200);
   }, 100);
 }
 
@@ -519,7 +518,7 @@ function clearFile() {
   document.getElementById('pbSub').textContent   = 'Configure your settings above, then click Process.';
   const ctrl = document.getElementById('editorControls');
   if (ctrl) ctrl.classList.remove('visible');
-  document.querySelectorAll('.preset-card').forEach(c => { c.classList.remove('visible'); c.style.opacity='0'; c.style.transform='translateY(14px)'; });
+  document.querySelectorAll('.preset-card').forEach(c => { c.style.animation = ''; });
   toast('🗑 File removed');
 }
 
@@ -538,11 +537,11 @@ const PRESETS = [
 ];
 
 document.getElementById('presetsGrid').innerHTML = PRESETS.map((p,i)=>{
-  const isFeatured = i >= 8; // new quality presets
+  const isFeatured = i >= 8;
   const badge = p.n==='4K Ultra Crisp' ? '<span class="preset-badge">4K</span>' :
                 p.n==='TikTok Ready'   ? '<span class="preset-badge">TikTok</span>' :
                 p.n==='YouTube Ready'  ? '<span class="preset-badge">YT</span>' : '';
-  return `<div class="preset-card${isFeatured?' featured-preset':''}" onclick="applyPreset(${i})" style="animation:fup .4s ${i*.04}s ease both">
+  return `<div class="preset-card${isFeatured?' featured-preset':''}" onclick="applyPreset(${i})">
     ${badge}
     <span class="preset-emoji">${p.e}</span>
     <div class="preset-name">${p.n}</div>
@@ -556,7 +555,7 @@ function applyPreset(i){
   document.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));
   (p.chips||[]).forEach(v=>{const c=document.querySelector(`.chip[data-v="${v}"]`);if(c)c.classList.add('on');});
   toast('✨ Preset applied!','ok');
-  document.querySelector('.editor-section').scrollIntoView({behavior:'smooth',block:'start'});
+  document.getElementById('editorControls').scrollIntoView({behavior:'smooth',block:'start'});
 }
 
 
