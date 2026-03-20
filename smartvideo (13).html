@@ -1,0 +1,1884 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SmartVideo — AI Video Editor</title>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Fraunces:ital,wght@0,300;0,700;1,300;1,700&display=swap" rel="stylesheet">
+<!-- Firebase v10 modular SDK -->
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword,
+         signOut, onAuthStateChanged, sendPasswordResetEmail,
+         GoogleAuthProvider, signInWithPopup, updateProfile
+       } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
+import { getFirestore, doc, setDoc, getDoc, serverTimestamp
+       } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+
+// ── YOUR FIREBASE CONFIG ──────────────────────────────────────────
+// 1. Go to https://console.firebase.google.com
+// 2. Create a project (or use existing)
+// 3. Add a Web App → copy the firebaseConfig object below
+// 4. Enable Authentication → Email/Password + Google providers
+// 5. Enable Firestore Database (start in test mode)
+// Replace the values below with your own config:
+const firebaseConfig = {
+  apiKey:            "REPLACE_WITH_YOUR_API_KEY",
+  authDomain:        "REPLACE_WITH_YOUR_AUTH_DOMAIN",
+  projectId:         "REPLACE_WITH_YOUR_PROJECT_ID",
+  storageBucket:     "REPLACE_WITH_YOUR_STORAGE_BUCKET",
+  messagingSenderId: "REPLACE_WITH_YOUR_MESSAGING_SENDER_ID",
+  appId:             "REPLACE_WITH_YOUR_APP_ID"
+};
+
+const app  = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db   = getFirestore(app);
+const googleProvider = new GoogleAuthProvider();
+
+// ── Expose to global scope for use outside this module ────────────
+window._fb = {
+  auth, db, googleProvider,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut,
+  sendPasswordResetEmail,
+  signInWithPopup,
+  updateProfile,
+  doc, setDoc, getDoc, serverTimestamp,
+  GoogleAuthProvider
+};
+
+// ── Auth state listener — fires on every auth change ─────────────
+onAuthStateChanged(auth, async (user) => {
+  window._currentUser = user || null;
+
+  if (user) {
+    // Load pro status from Firestore
+    try {
+      const snap = await getDoc(doc(db, 'users', user.uid));
+      window._userProfile = snap.exists() ? snap.data() : {};
+    } catch(e) {
+      window._userProfile = {};
+    }
+  } else {
+    window._userProfile = {};
+  }
+
+  // Notify the app that auth state is ready
+  if (typeof window.onAuthReady === 'function') window.onAuthReady(user);
+});
+</script>
+<style>
+:root{
+  --ink:#0d0d0d;--surface:#f5f2ee;--surface2:#edeae4;--surface3:#e4e0d8;
+  --white:#faf9f7;--accent:#ff4d1c;--accent2:#ff8c00;--accent-glow:rgba(255,77,28,.2);
+  --text2:#4a4a4a;--text3:#888;--border:rgba(13,13,13,.1);--green:#1a9e5c;
+  --radius:16px;--radius-sm:10px;--radius-xs:6px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Outfit',sans-serif;background:var(--surface);color:var(--ink);min-height:100vh;overflow-x:hidden}
+nav{position:sticky;top:0;z-index:100;background:rgba(245,242,238,.94);backdrop-filter:blur(18px);border-bottom:1px solid var(--border);padding:0 32px;height:66px;display:flex;align-items:center;gap:12px}
+.nav-logo{display:flex;align-items:center;gap:9px;font-family:'Fraunces',serif;font-size:21px;font-weight:700;color:var(--ink);text-decoration:none;flex-shrink:0}
+.nav-wordmark em{color:var(--accent);font-style:normal}
+.nav-links{display:flex;align-items:center;gap:4px;margin-left:8px}
+.nav-links a{padding:7px 14px;font-size:13.5px;font-weight:500;color:var(--text2);text-decoration:none;border-radius:100px;transition:all .15s}
+.nav-links a:hover{background:var(--surface2);color:var(--ink)}
+.nav-sep{width:1px;height:20px;background:var(--border);margin:0 4px;flex-shrink:0}
+.nav-right{margin-left:auto;display:flex;align-items:center;gap:8px}
+.btn-pro{display:flex;align-items:center;gap:6px;padding:8px 16px;background:linear-gradient(135deg,#f59e0b,#f97316);color:white;border:none;border-radius:100px;font-family:'Outfit',sans-serif;font-size:13px;font-weight:700;cursor:pointer;transition:all .15s}
+.btn-pro:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(245,158,11,.35)}
+.btn-pro.is-pro{background:linear-gradient(135deg,var(--green),#059669);box-shadow:none}
+.btn-pro.is-pro:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(16,185,129,.35)}
+/* Pro feature lock styles */
+.pro-lock{position:relative}
+.pro-lock-badge{position:absolute;top:-6px;right:-6px;width:18px;height:18px;background:linear-gradient(135deg,#f59e0b,#f97316);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;color:white;font-weight:800;pointer-events:none;box-shadow:0 2px 6px rgba(245,158,11,.4)}
+.pro-locked select,.pro-locked input[type=range]{opacity:.45;pointer-events:none}
+.pro-locked-overlay{display:none;position:absolute;inset:0;background:rgba(245,242,238,.7);backdrop-filter:blur(2px);border-radius:var(--radius);align-items:center;justify-content:center;flex-direction:column;gap:8px;cursor:pointer;z-index:10}
+.pro-locked-overlay.show{display:flex}
+.pro-lock-msg{font-size:13px;font-weight:700;color:var(--ink);text-align:center}
+.pro-lock-msg span{color:var(--accent)}
+.pro-lock-btn{padding:7px 18px;background:linear-gradient(135deg,#f59e0b,#f97316);color:white;border:none;border-radius:100px;font-family:'Outfit',sans-serif;font-size:12px;font-weight:700;cursor:pointer}
+.btn-desktop{display:flex;align-items:center;gap:6px;padding:8px 16px;background:var(--ink);color:white;border:none;border-radius:100px;font-family:'Outfit',sans-serif;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s}
+.btn-desktop:hover{background:var(--accent);transform:translateY(-1px)}
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.5);backdrop-filter:blur(4px);z-index:999;display:none;align-items:center;justify-content:center}
+.modal-bg.open{display:flex}
+.modal{background:var(--white);border-radius:24px;padding:40px;max-width:480px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.2);position:relative;animation:mIn .25s ease}
+@keyframes mIn{from{opacity:0;transform:translateY(16px) scale(.97)}to{opacity:1;transform:none}}
+.modal-close{position:absolute;top:16px;right:16px;width:32px;height:32px;background:var(--surface2);border:none;border-radius:50%;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;color:var(--text3)}
+.modal-close:hover{background:var(--surface3);color:var(--ink)}
+.modal h2{font-family:'Fraunces',serif;font-size:26px;font-weight:700;margin-bottom:8px}
+.modal p{font-size:14px;color:var(--text2);line-height:1.65;margin-bottom:20px}
+.modal-plans{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:24px}
+.plan{border:1px solid var(--border);border-radius:var(--radius-sm);padding:16px}
+.plan.featured{border-color:var(--accent);background:rgba(255,77,28,.04)}
+.plan-name{font-size:13px;font-weight:700;margin-bottom:4px}
+.plan-price{font-family:'Fraunces',serif;font-size:24px;font-weight:700;margin-bottom:6px}
+.plan-price span{font-size:13px;font-weight:400;color:var(--text3)}
+.plan-feat{font-size:12px;color:var(--text2);line-height:1.6}
+.modal-cta{width:100%;padding:14px;background:linear-gradient(135deg,#f59e0b,#f97316);color:white;border:none;border-radius:100px;font-family:'Outfit',sans-serif;font-size:15px;font-weight:700;cursor:pointer;transition:all .15s}
+.modal-cta.dark{background:var(--ink);margin-top:10px}
+.modal-cta.dark:hover{background:var(--accent)}
+.feat-list{list-style:none;margin-bottom:20px}
+.feat-list li{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text2);padding:6px 0;border-bottom:1px solid var(--border)}
+.feat-list li:last-child{border:none}
+.feat-check{width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.hero{padding:72px 40px 52px;max-width:1200px;margin:0 auto;display:grid;grid-template-columns:1fr 1fr;gap:72px;align-items:start}
+.hero-left h1{font-family:'Fraunces',serif;font-size:clamp(38px,5vw,58px);font-weight:700;line-height:1.08;letter-spacing:-.03em;margin-bottom:18px}
+.hero-left h1 em{font-style:italic;color:var(--accent)}
+.hero-left p{font-size:16px;color:var(--text2);line-height:1.65;max-width:400px;margin-bottom:28px}
+.hero-tags{display:flex;flex-wrap:wrap;gap:8px}
+.tag{display:inline-flex;align-items:center;gap:5px;padding:6px 14px;background:var(--white);border:1px solid var(--border);border-radius:100px;font-size:13px;font-weight:500;color:var(--text2)}
+.tdot{width:6px;height:6px;border-radius:50%;background:var(--accent);flex-shrink:0}
+.tdot.g{background:var(--green)}.tdot.o{background:var(--accent2)}
+.upload-card{background:var(--white);border:1px solid var(--border);border-radius:24px;padding:28px;box-shadow:0 4px 40px rgba(0,0,0,.06)}
+.drop-zone{border:2px dashed rgba(13,13,13,.15);border-radius:var(--radius);padding:44px 28px;text-align:center;cursor:pointer;transition:all .2s;background:var(--surface)}
+.drop-zone:hover,.drop-zone.over{border-color:var(--accent);background:rgba(255,77,28,.03);box-shadow:inset 0 0 0 4px rgba(255,77,28,.06)}
+.drop-zone.over{transform:scale(1.01)}
+.dz-icon{width:64px;height:64px;background:var(--ink);border-radius:18px;display:flex;align-items:center;justify-content:center;margin:0 auto 16px;transition:all .2s}
+.drop-zone:hover .dz-icon,.drop-zone.over .dz-icon{background:var(--accent);transform:scale(1.08) rotate(-4deg)}
+.dz-title{font-family:'Fraunces',serif;font-size:21px;font-weight:700;margin-bottom:8px}
+.dz-sub{font-size:13px;color:var(--text3);line-height:1.6;margin-bottom:18px}
+.dz-btn{display:inline-flex;align-items:center;gap:7px;padding:10px 22px;background:var(--ink);color:var(--white);border:none;border-radius:100px;font-family:'Outfit',sans-serif;font-size:13px;font-weight:600;pointer-events:none}
+.drop-zone:hover .dz-btn,.drop-zone.over .dz-btn{background:var(--accent)}
+.dz-note{margin-top:12px;font-size:12px;color:var(--text3)}
+input[type="file"]{display:none}
+.file-preview{display:none;flex-direction:column;gap:12px}
+.file-preview.show{display:flex}
+.vid-wrap{border-radius:var(--radius);overflow:hidden;background:#000;aspect-ratio:16/9;position:relative}
+.vid-wrap video{width:100%;height:100%;object-fit:contain;display:block}
+.vid-status{position:absolute;top:10px;right:10px;padding:4px 10px;border-radius:100px;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;backdrop-filter:blur(8px)}
+.vs-orig{background:rgba(0,0,0,.5);color:white;border:1px solid rgba(255,255,255,.2)}
+.vs-done{background:var(--green);color:white}
+.file-info{display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--surface);border-radius:var(--radius-sm);border:1px solid var(--border)}
+.fi-icon{font-size:20px}.fi-details{flex:1;min-width:0}
+.fi-name{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fi-meta{font-size:12px;color:var(--text3);margin-top:2px;display:flex;gap:10px;flex-wrap:wrap}
+.fi-rm{background:none;border:none;cursor:pointer;width:28px;height:28px;display:flex;align-items:center;justify-content:center;border-radius:50%;font-size:14px;color:var(--text3);transition:all .15s;flex-shrink:0}
+.fi-rm:hover{background:#fee2e2;color:var(--accent)}
+.editor-section{max-width:1200px;margin:0 auto;padding:0 40px 72px}
+.sec-label{display:flex;align-items:center;gap:10px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--text3);margin-bottom:20px}
+.sec-label::after{content:'';flex:1;height:1px;background:var(--border)}
+.ctrl-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:14px}
+.ctrl-card{background:var(--white);border:1px solid var(--border);border-radius:var(--radius);padding:20px}
+.ctrl-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text3);margin-bottom:14px}
+select{width:100%;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-xs);color:var(--ink);font-family:'Outfit',sans-serif;font-size:13px;font-weight:500;padding:9px 30px 9px 12px;cursor:pointer;outline:none;-webkit-appearance:none;appearance:none;transition:border-color .15s;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2.5'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center}
+select:hover,select:focus{border-color:var(--ink)}
+.field{margin-bottom:12px}.field:last-child{margin-bottom:0}
+.fl{display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:600;color:var(--text2);margin-bottom:6px}
+.fv{font-size:12px;font-weight:700;color:var(--accent);background:rgba(255,77,28,.08);padding:1px 8px;border-radius:100px}
+input[type="range"]{width:100%;height:3px;background:var(--surface3);border:none;border-radius:2px;-webkit-appearance:none;cursor:pointer;outline:none}
+input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;background:var(--ink);border-radius:50%;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.3);transition:background .15s}
+input[type="range"]:hover::-webkit-slider-thumb{background:var(--accent)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{padding:5px 12px;border-radius:100px;font-size:12px;font-weight:600;cursor:pointer;user-select:none;border:1px solid var(--border);background:var(--surface);color:var(--text2);transition:all .12s}
+.chip:hover{border-color:rgba(13,13,13,.35);color:var(--ink)}
+.chip.on{background:var(--ink);color:var(--white);border-color:var(--ink)}
+.togrow{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0}
+.toginfo .tl{font-size:13px;font-weight:500}.toginfo .ts{font-size:11px;color:var(--text3);margin-top:1px}
+.tog{width:38px;height:22px;background:var(--surface3);border:1px solid var(--border);border-radius:100px;cursor:pointer;position:relative;transition:all .2s;flex-shrink:0}
+.tog.on{background:var(--ink);border-color:var(--ink)}
+.tog::after{content:'';position:absolute;width:15px;height:15px;background:var(--white);border-radius:50%;top:2.5px;left:2.5px;transition:left .2s;box-shadow:0 1px 3px rgba(0,0,0,.2)}
+.tog.on::after{left:19px}
+.proc-bar{background:var(--white);border:1px solid var(--border);border-radius:var(--radius);padding:22px 26px;display:flex;align-items:center;gap:16px}
+.pb-l{flex:1;min-width:0}
+.pb-title{font-family:'Fraunces',serif;font-size:17px;font-weight:700;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pb-sub{font-size:13px;color:var(--text3)}
+.prog{flex:1;display:none;flex-direction:column;gap:7px;min-width:120px}
+.prog.show{display:flex}
+.prog-top{display:flex;justify-content:space-between;font-size:13px}
+.prog-lbl{color:var(--text2);font-weight:500}.prog-pct{font-weight:700;color:var(--accent)}
+.prog-track{height:5px;background:var(--surface3);border-radius:100px;overflow:hidden}
+.prog-fill{height:100%;width:0%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:100px;transition:width .3s ease}
+.proc-btn{padding:12px 24px;background:var(--ink);color:var(--white);border:none;border-radius:100px;font-family:'Outfit',sans-serif;font-size:14px;font-weight:700;cursor:pointer;transition:all .15s;white-space:nowrap;flex-shrink:0}
+.proc-btn:hover:not(:disabled){background:var(--accent);box-shadow:0 8px 28px var(--accent-glow);transform:translateY(-1px)}
+.proc-btn:disabled{background:var(--surface3);color:var(--text3);cursor:not-allowed;transform:none;box-shadow:none}
+.dl-btn{padding:12px 24px;background:var(--green);color:white;border:none;border-radius:100px;font-family:'Outfit',sans-serif;font-size:14px;font-weight:700;cursor:pointer;transition:all .15s;white-space:nowrap;flex-shrink:0;display:none;align-items:center;gap:7px;text-decoration:none}
+.dl-btn:hover{transform:translateY(-1px);box-shadow:0 8px 28px rgba(26,158,92,.3)}
+.dl-btn.show{display:flex}
+.size-pill{display:none;align-items:center;gap:5px;padding:6px 13px;background:rgba(26,158,92,.1);border:1px solid rgba(26,158,92,.25);border-radius:100px;font-size:13px;font-weight:600;color:var(--green);white-space:nowrap;flex-shrink:0}
+.size-pill.show{display:flex}
+.presets-section{max-width:1200px;margin:0 auto;padding:0 40px 72px}
+.presets-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}
+.preset-card{background:var(--white);border:1px solid var(--border);border-radius:var(--radius);padding:18px;cursor:pointer;transition:all .15s;position:relative;overflow:hidden}
+.preset-card:hover{border-color:var(--accent);transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.08)}
+.preset-card.featured-preset{border-color:rgba(255,77,28,.3);background:linear-gradient(135deg,rgba(255,77,28,.04),var(--white))}
+.preset-card.featured-preset:hover{border-color:var(--accent)}
+.preset-badge{position:absolute;top:10px;right:10px;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;padding:2px 7px;border-radius:100px;background:var(--accent);color:white}
+.preset-emoji{font-size:26px;margin-bottom:10px;display:block}
+.preset-name{font-size:14px;font-weight:700;margin-bottom:3px}
+.preset-desc{font-size:12px;color:var(--text3);line-height:1.5}
+/* Tips section */
+.tips-section{max-width:1200px;margin:0 auto;padding:0 40px 72px}
+.tips-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.tip-card{background:var(--white);border:1px solid var(--border);border-radius:var(--radius);padding:22px}
+.tip-card-icon{font-size:28px;margin-bottom:12px;display:block}
+.tip-card-title{font-family:'Fraunces',serif;font-size:16px;font-weight:700;margin-bottom:8px;color:var(--ink)}
+.tip-card p{font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:8px}
+.tip-card p:last-child{margin-bottom:0}
+.tip-tag{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:100px;font-size:11px;font-weight:700;margin:2px 2px 2px 0}
+.tip-tag.tiktok{background:rgba(0,0,0,.06);color:var(--ink);border:1px solid rgba(0,0,0,.1)}
+.tip-tag.yt{background:rgba(255,0,0,.08);color:#cc0000;border:1px solid rgba(255,0,0,.15)}
+.tip-tag.general{background:rgba(255,77,28,.08);color:var(--accent);border:1px solid rgba(255,77,28,.2)}
+.tip-stat{font-size:22px;font-family:'Fraunces',serif;font-weight:700;color:var(--accent);display:block;margin-bottom:3px}
+footer{border-top:1px solid var(--border);padding:24px 40px;display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--text3);max-width:1200px;margin:0 auto}
+.footer-logo{font-family:'Fraunces',serif;font-weight:700;font-size:16px;color:var(--ink)}
+.footer-logo span{color:var(--accent)}
+.divider{height:1px;background:var(--border);max-width:1200px;margin:0 auto 52px}
+.toast-pile{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:8px;z-index:9999;pointer-events:none}
+.toast{background:var(--ink);color:var(--white);padding:12px 18px;border-radius:100px;font-size:14px;font-weight:500;box-shadow:0 8px 30px rgba(0,0,0,.2);animation:tin .25s ease;pointer-events:auto}
+.toast.ok{background:var(--green)}.toast.err{background:#c0392b}
+@keyframes tin{from{opacity:0;transform:translateY(12px) scale(.95)}to{opacity:1;transform:none}}
+@keyframes fup{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+.fi0{animation:fup .4s ease both}.fi1{animation:fup .4s .08s ease both}.fi2{animation:fup .4s .16s ease both}
+#glCanvas{position:fixed;left:-9999px;top:0;pointer-events:none}
+</style>
+</head>
+<body>
+
+<canvas id="glCanvas"></canvas>
+
+<!-- MODALS -->
+<!-- AUTH MODAL -->
+<div class="modal-bg" id="authModal">
+  <div class="modal" style="max-width:420px">
+    <button class="modal-close" onclick="closeModal('authModal')">✕</button>
+
+    <!-- Sign In View -->
+    <div id="authSignInView">
+      <h2 style="margin-bottom:6px">Welcome back</h2>
+      <p style="margin-bottom:20px">Sign in to your SmartVideo account.</p>
+      <div class="auth-error" id="siError"></div>
+      <input class="auth-input" id="siEmail" type="email" placeholder="Email address" autocomplete="email">
+      <input class="auth-input" id="siPassword" type="password" placeholder="Password" autocomplete="current-password"
+        onkeydown="if(event.key==='Enter')doSignIn()">
+      <button class="modal-cta" onclick="doSignIn()" id="siBtnSubmit">Sign In</button>
+      <div style="text-align:right;margin-top:8px">
+        <button onclick="showForgotView()" style="background:none;border:none;font-size:12px;color:var(--text3);cursor:pointer;text-decoration:underline">Forgot password?</button>
+      </div>
+      <div class="auth-divider">or</div>
+      <button class="btn-google" onclick="doGoogleSignIn()">
+        <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.08 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-3.59-13.46-8.83l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+        Continue with Google
+      </button>
+      <div class="auth-switch">Don't have an account? <button onclick="showSignUpView()">Create one</button></div>
+    </div>
+
+    <!-- Sign Up View -->
+    <div id="authSignUpView" style="display:none">
+      <h2 style="margin-bottom:6px">Create account</h2>
+      <p style="margin-bottom:20px">Free to start. Upgrade to Pro anytime.</p>
+      <div class="auth-error" id="suError"></div>
+      <input class="auth-input" id="suName" type="text" placeholder="Your name" autocomplete="name">
+      <input class="auth-input" id="suEmail" type="email" placeholder="Email address" autocomplete="email">
+      <input class="auth-input" id="suPassword" type="password" placeholder="Password (min 8 characters)" autocomplete="new-password"
+        onkeydown="if(event.key==='Enter')doSignUp()">
+      <button class="modal-cta" onclick="doSignUp()" id="suBtnSubmit">Create Account</button>
+      <div class="auth-divider">or</div>
+      <button class="btn-google" onclick="doGoogleSignIn()">
+        <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.08 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-3.59-13.46-8.83l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+        Continue with Google
+      </button>
+      <div class="auth-switch">Already have an account? <button onclick="showSignInView()">Sign in</button></div>
+    </div>
+
+    <!-- Forgot Password View -->
+    <div id="authForgotView" style="display:none">
+      <h2 style="margin-bottom:6px">Reset password</h2>
+      <p style="margin-bottom:20px">We'll send a reset link to your email.</p>
+      <div class="auth-error" id="fpError"></div>
+      <input class="auth-input" id="fpEmail" type="email" placeholder="Email address"
+        onkeydown="if(event.key==='Enter')doForgotPassword()">
+      <button class="modal-cta" onclick="doForgotPassword()">Send Reset Link</button>
+      <div class="auth-switch"><button onclick="showSignInView()">← Back to sign in</button></div>
+    </div>
+
+    <!-- Reset Sent -->
+    <div id="authForgotSentView" style="display:none;text-align:center">
+      <div style="font-size:44px;margin-bottom:14px">📬</div>
+      <h2 style="margin-bottom:8px">Check your email</h2>
+      <p style="margin-bottom:20px">We sent a password reset link to your email address.</p>
+      <button class="modal-cta dark" onclick="showSignInView()">Back to Sign In</button>
+    </div>
+  </div>
+</div>
+
+<!-- ACCOUNT MODAL (shown when already signed in) -->
+<div class="modal-bg" id="accountModal">
+  <div class="modal" style="max-width:440px">
+    <button class="modal-close" onclick="closeModal('accountModal')">✕</button>
+    <div style="display:flex;align-items:center;gap:14px;margin-bottom:20px">
+      <div class="user-avatar-circle" id="acctAvatarBig" style="width:52px;height:52px;font-size:20px"></div>
+      <div>
+        <div style="font-family:'Fraunces',serif;font-size:20px;font-weight:700" id="acctName">—</div>
+        <div style="font-size:13px;color:var(--text3)" id="acctEmail">—</div>
+      </div>
+    </div>
+
+    <!-- Pro status card inside account -->
+    <div id="acctProCard" style="border-radius:var(--radius-sm);padding:14px;margin-bottom:16px;border:1px solid var(--border)">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:3px">Plan</div>
+          <div id="acctPlanName" style="font-size:16px;font-weight:700;color:var(--ink)">Free</div>
+        </div>
+        <button id="acctUpgradeBtn" onclick="closeModal('accountModal');handleProClick()" class="btn-pro" style="font-size:12px;padding:7px 14px">✨ Upgrade</button>
+      </div>
+    </div>
+
+    <div style="border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;margin-bottom:16px">
+      <div style="padding:12px 14px;border-bottom:1px solid var(--border)">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:2px">Member since</div>
+        <div style="font-size:13px;font-weight:600;color:var(--ink)" id="acctCreated">—</div>
+      </div>
+      <div style="padding:12px 14px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:2px">Account ID</div>
+        <div style="font-size:12px;color:var(--text3);font-family:monospace" id="acctUID">—</div>
+      </div>
+    </div>
+
+    <button class="modal-cta dark" onclick="doSignOut()" style="background:#fff3f3;color:#c0392b;border:1px solid rgba(192,57,43,.2)">Sign Out</button>
+  </div>
+</div>
+
+<div class="modal-bg" id="proModal">
+  <div class="modal" id="proModalInner">
+    <button class="modal-close" onclick="closeModal('proModal')">✕</button>
+
+    <!-- STATE: not pro -->
+    <div id="proPayView">
+      <h2>Upgrade to Pro ✨</h2>
+      <p style="margin-bottom:24px">One plan, everything unlocked — no watermark, 4K export, and all presets.</p>
+
+      <div style="border:2px solid var(--accent);border-radius:var(--radius);padding:20px;margin-bottom:20px;background:rgba(255,77,28,.03)">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <div>
+            <div style="font-size:13px;font-weight:700;color:var(--text2);margin-bottom:2px">SmartVideo Pro</div>
+            <div style="font-family:'Fraunces',serif;font-size:32px;font-weight:700;line-height:1">$5<span style="font-size:14px;font-weight:400;color:var(--text3)">/month</span></div>
+          </div>
+          <div style="font-size:28px">🚀</div>
+        </div>
+        <ul style="list-style:none;display:flex;flex-direction:column;gap:6px">
+          <li style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text2)">
+            <span style="width:16px;height:16px;border-radius:50%;background:var(--green);display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span>
+            No watermark on exported videos
+          </li>
+          <li style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text2)">
+            <span style="width:16px;height:16px;border-radius:50%;background:var(--green);display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span>
+            4K export (3840×2160) unlocked
+          </li>
+          <li style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text2)">
+            <span style="width:16px;height:16px;border-radius:50%;background:var(--green);display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span>
+            50 Mbps max bitrate unlocked
+          </li>
+          <li style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text2)">
+            <span style="width:16px;height:16px;border-radius:50%;background:var(--green);display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span>
+            All presets + TikTok/YouTube export tools
+          </li>
+          <li style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text2)">
+            <span style="width:16px;height:16px;border-radius:50%;background:var(--green);display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span>
+            Cancel anytime
+          </li>
+        </ul>
+      </div>
+
+      <button class="modal-cta" onclick="goToStripe()">
+        Subscribe for $5/month — Pay with Stripe
+      </button>
+
+      <div style="margin-top:14px;text-align:center;font-size:12px;color:var(--text3)">
+        Already paid?
+        <button onclick="showActivateView()" style="background:none;border:none;color:var(--accent);font-size:12px;font-weight:600;cursor:pointer;text-decoration:underline">Enter your activation code</button>
+      </div>
+    </div>
+
+    <!-- STATE: enter activation code -->
+    <div id="proActivateView" style="display:none">
+      <h2>Activate Pro ✨</h2>
+      <p style="margin-bottom:20px">After completing your Stripe payment, copy the order ID from your receipt and paste it below.</p>
+
+      <div style="margin-bottom:14px">
+        <label style="font-size:12px;font-weight:700;color:var(--text2);display:block;margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em">Stripe Order / Session ID</label>
+        <input type="text" id="proCodeInput" placeholder="cs_test_... or order ID from receipt"
+          style="width:100%;padding:12px 14px;border:1px solid var(--border);border-radius:var(--radius-xs);font-family:'Outfit',sans-serif;font-size:13px;outline:none;background:var(--surface);color:var(--ink);transition:border-color .15s"
+          onfocus="this.style.borderColor='var(--accent)'"
+          onblur="this.style.borderColor='var(--border)'"
+          onkeydown="if(event.key==='Enter')activatePro()">
+      </div>
+
+      <button class="modal-cta" onclick="activatePro()">Activate Pro</button>
+      <button onclick="showPayView()" class="modal-cta dark" style="margin-top:8px">← Back</button>
+    </div>
+
+    <!-- STATE: pro active -->
+    <div id="proActiveView" style="display:none;text-align:center">
+      <div style="font-size:52px;margin-bottom:16px">🎉</div>
+      <h2 style="margin-bottom:8px">You're on Pro!</h2>
+      <p style="margin-bottom:20px">Watermark removed, 4K unlocked, full bitrate available. Enjoy!</p>
+      <div style="background:rgba(26,158,92,.08);border:1px solid rgba(26,158,92,.25);border-radius:var(--radius-sm);padding:14px;margin-bottom:20px;font-size:13px;color:var(--green);font-weight:600">
+        ✓ Pro active — <span id="proCodeDisplay"></span>
+      </div>
+      <button class="modal-cta dark" onclick="closeModal('proModal')">Close</button>
+      <button onclick="revokePro()" style="background:none;border:none;font-size:12px;color:var(--text3);cursor:pointer;display:block;margin:12px auto 0;text-decoration:underline">Remove Pro (sign out)</button>
+    </div>
+  </div>
+</div>
+<div class="modal-bg" id="desktopModal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal('desktopModal')">✕</button>
+    <h2>SmartVideo Desktop 🖥️</h2>
+    <p>The full desktop app — in development. Coming soon:</p>
+    <ul class="feat-list">
+      <li><span class="feat-check" style="background:var(--accent)"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span>FFmpeg encoding — frame-perfect quality</li>
+      <li><span class="feat-check" style="background:var(--green)"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span>Timeline editor — cut, trim, merge</li>
+      <li><span class="feat-check" style="background:var(--green)"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span>AI upscaling &amp; noise reduction</li>
+      <li><span class="feat-check" style="background:var(--green)"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span>Batch processing · no watermark</li>
+    </ul>
+    <button class="modal-cta dark" onclick="closeModal('desktopModal');toast('📬 We\'ll notify you!','ok')">Notify Me When It Launches</button>
+  </div>
+</div>
+
+<!-- NAV -->
+<nav>
+  <a class="nav-logo" href="#">
+    <svg width="34" height="34" viewBox="0 0 34 34" fill="none">
+      <rect width="34" height="34" rx="9" fill="#0d0d0d"/>
+      <path d="M9 10.8C9 9.67 10.22 8.96 11.2 9.48L25.6 17.28C26.52 17.77 26.52 19.09 25.6 19.58L11.2 27.38C10.22 27.9 9 27.19 9 26.06V10.8Z" fill="white"/>
+      <rect x="9" y="29" width="16" height="2.5" rx="1.25" fill="#ff4d1c"/>
+    </svg>
+    <span class="nav-wordmark">Smart<em>Video</em></span>
+  </a>
+  <div class="nav-links"><a href="#">Features</a><a href="#">Formats</a><a href="#">Presets</a></div>
+  <div class="nav-sep"></div>
+  <div class="nav-right">
+    <button class="btn-desktop" onclick="openModal('desktopModal')">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+      Get Desktop App
+    </button>
+    <!-- Shown when signed OUT -->
+    <button class="btn-signin" id="navSignInBtn" onclick="openAuthModal()">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      Sign In
+    </button>
+    <button class="btn-pro" id="navProBtn" onclick="handleProClick()">✨ Go Pro</button>
+    <!-- Shown when signed IN -->
+    <div class="user-menu-wrap" id="navUserMenu" style="display:none">
+      <button class="user-menu-btn" id="navUserBtn" onclick="toggleUserDropdown()">
+        <div class="user-avatar-circle" id="navAvatarCircle">?</div>
+        <span id="navUserName">Account</span>
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+      <div class="user-dropdown" id="userDropdown">
+        <div class="ud-header">
+          <div class="ud-name" id="ddName">—</div>
+          <div class="ud-email" id="ddEmail">—</div>
+        </div>
+        <button class="ud-item" onclick="openAccountModal()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          My Account
+          <span id="ddProBadge" class="pro-badge-inline" style="display:none">PRO</span>
+        </button>
+        <button class="ud-item" onclick="closeUserDropdown();handleProClick()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+          <span id="ddProLabel">Upgrade to Pro</span>
+        </button>
+        <div class="ud-sep"></div>
+        <button class="ud-item danger" onclick="doSignOut()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          Sign Out
+        </button>
+      </div>
+    </div>
+  </div>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-left fi0">
+    <h1>Edit video with<br><em>AI superpowers.</em></h1>
+    <p>Drop any video — no size limit, 10+ minutes supported. GPU color grading, perfect audio sync, beautiful output every time.</p>
+    <div class="hero-tags">
+      <span class="tag"><span class="tdot"></span>GPU Color Grading</span>
+      <span class="tag"><span class="tdot o"></span>Perfect A/V Sync</span>
+      <span class="tag"><span class="tdot g"></span>Audio Preserved</span>
+      <span class="tag">100% In-Browser</span>
+    </div>
+  </div>
+  <div class="upload-card fi1">
+    <div class="drop-zone" id="dropZone">
+      <div class="dz-icon">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+      </div>
+      <div class="dz-title">Drop your video here</div>
+      <div class="dz-sub">MP4, MOV, MKV, AVI, WebM — any size.<br>Files never leave your browser.</div>
+      <div class="dz-btn">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        Choose a file
+      </div>
+      <div class="dz-note">⚡ 10 min+ supported · GPU accelerated</div>
+      <input type="file" id="fileInput" accept="video/*">
+    </div>
+    <div class="file-preview" id="filePreview">
+      <div class="vid-wrap">
+        <video id="videoEl" controls playsinline preload="metadata"></video>
+        <span class="vid-status vs-orig" id="vidStatus">Original</span>
+      </div>
+      <div class="file-info">
+        <span class="fi-icon">🎬</span>
+        <div class="fi-details">
+          <div class="fi-name" id="fiName">—</div>
+          <div class="fi-meta"><span id="fiDur">—</span><span id="fiSize">—</span><span id="fiDims">—</span></div>
+        </div>
+        <button class="fi-rm" onclick="clearFile()">✕</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- EDITOR -->
+<section class="editor-section fi2">
+  <div class="sec-label">⚙️ Editor Settings</div>
+  <div class="ctrl-grid">
+    <div class="ctrl-card">
+      <div class="ctrl-title">📦 Output</div>
+      <div class="field"><div class="fl">Format</div>
+        <select id="selFmt">
+          <option value="mp4" selected>MP4 — Best compatibility (Windows Photos ✓)</option>
+          <option value="webm">WebM — Smaller file size</option>
+          <option value="webm-vp9">WebM VP9 — High quality web</option>
+        </select>
+      </div>
+      <div class="field"><div class="fl">Resolution</div>
+        <select id="selRes">
+          <option value="src">Original (keep source)</option>
+          <option value="3840x2160">4K — 3840×2160</option>
+          <option value="1920x1080">1080p — 1920×1080</option>
+          <option value="1280x720">720p — 1280×720</option>
+          <option value="854x480">480p — 854×480</option>
+          <option value="640x360">360p — 640×360</option>
+        </select>
+      </div>
+      <div class="field"><div class="fl">Video Bitrate <span class="fv" id="vBR">12 Mbps</span></div>
+        <input type="range" id="rBR" min="2" max="50" value="12" oninput="document.getElementById('vBR').textContent=this.value+' Mbps'">
+      </div>
+      <div class="field"><div class="fl">Speed <span class="fv" id="vSpeed">1×</span></div>
+        <input type="range" id="rSpeed" min="25" max="200" value="100" step="25" oninput="document.getElementById('vSpeed').textContent=(this.value/100)+'×'">
+      </div>
+    </div>
+    <div class="ctrl-card">
+      <div class="ctrl-title">🎨 Color Grade</div>
+      <div class="field"><div class="fl">Look / LUT</div>
+        <select id="selLut">
+          <option value="none">None — Keep original</option>
+          <option value="cinematic">🎬 Cinematic</option>
+          <option value="vintage">📷 Vintage</option>
+          <option value="vibrant">🌈 Vibrant</option>
+          <option value="bw">⬛ Black & White</option>
+          <option value="noir">🕵️ Film Noir</option>
+          <option value="teal">🎭 Teal & Orange</option>
+          <option value="cold">❄️ Cold & Crisp</option>
+          <option value="warm">🌅 Warm & Golden</option>
+          <option value="horror">🩸 Horror</option>
+          <option value="anime">🌸 Anime Vivid</option>
+        </select>
+      </div>
+      <div class="field"><div class="fl">Intensity <span class="fv" id="vCC">70%</span></div>
+        <input type="range" id="rCC" min="0" max="100" value="70" oninput="document.getElementById('vCC').textContent=this.value+'%'">
+      </div>
+      <div class="field"><div class="fl">Quick FX</div>
+        <div class="chips">
+          <div class="chip" data-v="vignette" onclick="this.classList.toggle('on')">⭕ Vignette</div>
+          <div class="chip" data-v="grain"    onclick="this.classList.toggle('on')">🎞 Grain</div>
+          <div class="chip" data-v="sharpen"  onclick="this.classList.toggle('on')">🔪 Sharpen</div>
+          <div class="chip" data-v="fade"     onclick="this.classList.toggle('on')">🌫 Fade</div>
+        </div>
+      </div>
+    </div>
+    <div class="ctrl-card">
+      <div class="ctrl-title">🎛️ Adjustments</div>
+      <div class="field"><div class="fl">Exposure <span class="fv" id="vExp">0</span></div>
+        <input type="range" id="rExp" min="-100" max="100" value="0" oninput="document.getElementById('vExp').textContent=this.value">
+      </div>
+      <div class="field"><div class="fl">Contrast <span class="fv" id="vCon">0</span></div>
+        <input type="range" id="rCon" min="-100" max="100" value="0" oninput="document.getElementById('vCon').textContent=this.value">
+      </div>
+      <div class="field"><div class="fl">Saturation <span class="fv" id="vSat">0</span></div>
+        <input type="range" id="rSat" min="-100" max="100" value="0" oninput="document.getElementById('vSat').textContent=this.value">
+      </div>
+      <div class="field"><div class="fl">Shadows <span class="fv" id="vShad">0</span></div>
+        <input type="range" id="rShad" min="-100" max="100" value="0" oninput="document.getElementById('vShad').textContent=this.value">
+      </div>
+      <div class="field"><div class="fl">Highlights <span class="fv" id="vHigh">0</span></div>
+        <input type="range" id="rHigh" min="-100" max="100" value="0" oninput="document.getElementById('vHigh').textContent=this.value">
+      </div>
+      <div class="field">
+        <div class="togrow">
+          <div class="toginfo"><div class="tl">Keep Audio</div><div class="ts">Preserve original track</div></div>
+          <button class="tog on" id="togAudio" onclick="this.classList.toggle('on')"></button>
+        </div>
+        <div class="togrow">
+          <div class="toginfo"><div class="tl">Boost Volume</div><div class="ts">+50% gain</div></div>
+          <button class="tog" id="togBoost" onclick="this.classList.toggle('on')"></button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="proc-bar">
+    <div class="pb-l">
+      <div class="pb-title" id="pbTitle">Ready to process</div>
+      <div class="pb-sub"   id="pbSub">Drop a video above, configure your settings, then click Process.</div>
+    </div>
+    <div class="prog" id="progWrap">
+      <div class="prog-top"><span class="prog-lbl" id="progLbl">Rendering…</span><span class="prog-pct" id="progPct">0%</span></div>
+      <div class="prog-track"><div class="prog-fill" id="progFill"></div></div>
+    </div>
+    <span class="size-pill" id="sizePill">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+      <span id="sizeText">—</span>
+    </span>
+    <button class="proc-btn" id="procBtn" onclick="startProcess()" disabled>▶ Process Video</button>
+    <a class="dl-btn" id="dlBtn" download>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Download
+    </a>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<section class="presets-section">
+  <div class="sec-label">⚡ Quick Presets</div>
+  <div class="presets-grid" id="presetsGrid"></div>
+</section>
+
+<div class="divider"></div>
+
+<section class="tips-section">
+  <div class="sec-label">🎯 Keep Quality on TikTok, YouTube &amp; Instagram</div>
+  <div class="tips-grid">
+
+    <div class="tip-card">
+      <span class="tip-card-icon">📐</span>
+      <div class="tip-card-title">Use the right resolution &amp; bitrate</div>
+      <p>TikTok and YouTube both re-compress your upload. To survive their compression and still look great, you need to upload at <strong>higher quality than you want to end up with</strong>.</p>
+      <p><span class="tip-stat">50 Mbps</span>Set bitrate to 50 Mbps before uploading. The platform will compress it down, but starting higher means less detail lost.</p>
+      <p>
+        <span class="tip-tag tiktok">TikTok: 1080×1920</span>
+        <span class="tip-tag yt">YouTube: 1920×1080</span>
+        <span class="tip-tag general">Reels: 1080×1920</span>
+      </p>
+    </div>
+
+    <div class="tip-card">
+      <span class="tip-card-icon">🔪</span>
+      <div class="tip-card-title">Always sharpen before uploading</div>
+      <p>Every platform applies a blur pass when compressing. Pre-sharpening your video compensates for this — the sharpened version after their compression will look as crisp as your original.</p>
+      <p>Use the <strong>🔪 Sharpen</strong> chip for this. It runs a real unsharp mask GPU shader — not a fake contrast boost. Apply it even if your video looks sharp already.</p>
+      <p><span class="tip-tag tiktok">Critical for TikTok</span> <span class="tip-tag yt">Recommended for YT</span></p>
+    </div>
+
+    <div class="tip-card">
+      <span class="tip-card-icon">🎨</span>
+      <div class="tip-card-title">Boost contrast &amp; saturation slightly</div>
+      <p>Platform compression flattens contrast and mutes colours. Boosting them slightly before upload means they survive compression looking natural — not washed out.</p>
+      <p>Add <strong>+10–20 Contrast</strong> and <strong>+10–15 Saturation</strong> in Adjustments. Don't go too far — you want it to look right <em>after</em> their compression, not before.</p>
+      <p><span class="tip-tag general">Use "TikTok Ready" or "YouTube Ready" preset →</span></p>
+    </div>
+
+    <div class="tip-card">
+      <span class="tip-card-icon">💎</span>
+      <div class="tip-card-title">4K upload = 1080p that actually looks 4K</div>
+      <p>YouTube gives 4K uploads a <strong>higher quality codec (VP9/AV1)</strong> even when displayed at 1080p. So uploading at 4K — even from a 1080p source — can make your 1080p stream look noticeably sharper.</p>
+      <p>Use the <strong>💎 4K Ultra Crisp</strong> preset. SmartVideo upscales your video to 4K with sharpening applied, then you upload that to YouTube for a cleaner 1080p stream.</p>
+      <p><span class="tip-tag yt">YouTube 4K trick</span></p>
+    </div>
+
+    <div class="tip-card">
+      <span class="tip-card-icon">⏱️</span>
+      <div class="tip-card-title">Frame rate matters</div>
+      <p>Upload at the native frame rate of your footage. TikTok handles 30fps best. YouTube handles both 30fps and 60fps well — use 60fps for gaming or action content.</p>
+      <p>Avoid converting 24fps → 30fps or vice versa. It causes judder. If your original is 24fps cinematic footage, keep it 24fps.</p>
+      <p>
+        <span class="tip-tag tiktok">TikTok: 30fps ideal</span>
+        <span class="tip-tag yt">YT: 30fps or 60fps</span>
+      </p>
+    </div>
+
+    <div class="tip-card">
+      <span class="tip-card-icon">📦</span>
+      <div class="tip-card-title">MP4 H.264 is the safest format</div>
+      <p>Always upload <strong>MP4</strong> — not WebM, MOV, or AVI. Every platform's ingest pipeline is optimised for H.264 MP4. Other formats get transcoded an extra time, losing quality.</p>
+      <p>SmartVideo exports MP4 by default. Keep it that way for uploads. WebM VP9 is great for embedding on websites, but not for social media uploads.</p>
+      <p>
+        <span class="tip-tag general">MP4 H.264 ✓</span>
+        <span class="tip-tag tiktok">TikTok ✓</span>
+        <span class="tip-tag yt">YouTube ✓</span>
+      </p>
+    </div>
+
+  </div>
+</section>
+
+<footer>
+  <div class="footer-logo">Smart<span>Video</span></div>
+  <div>GPU-accelerated · all processing in your browser · files never leave your device.</div>
+  <div>© 2025 SmartVideo</div>
+</footer>
+<div class="toast-pile" id="toastPile"></div>
+
+<script>
+'use strict';
+
+// ─── PRESETS ──────────────────────────────────────────────────────
+const PRESETS = [
+  {e:'📱',n:'Social Media',  d:'720p · vibrant · punchy',      s:{selFmt:'mp4',selRes:'1280x720', selLut:'vibrant',   rCC:'70',rBR:'10',rSpeed:'100',rExp:'5', rCon:'15',rSat:'25',rShad:'5', rHigh:'-5'}, chips:[]},
+  {e:'🎬',n:'Cinematic',     d:'1080p · warm · filmic grain',  s:{selFmt:'mp4',selRes:'1920x1080',selLut:'cinematic', rCC:'80',rBR:'18',rSpeed:'100',rExp:'-5',rCon:'12',rSat:'-10',rShad:'8',rHigh:'-8'}, chips:['grain','vignette']},
+  {e:'⬛',n:'Film Noir',     d:'B&W · deep contrast',          s:{selFmt:'mp4',selRes:'src',      selLut:'noir',      rCC:'100',rBR:'12',rSpeed:'100',rExp:'-5',rCon:'25',rSat:'-100',rShad:'10',rHigh:'-10'},chips:['grain','vignette']},
+  {e:'📷',n:'Vintage',       d:'Faded · sepia · retro',        s:{selFmt:'mp4',selRes:'src',      selLut:'vintage',   rCC:'75',rBR:'10',rSpeed:'100',rExp:'3', rCon:'-8',rSat:'-30',rShad:'5', rHigh:'-3'}, chips:['grain','vignette','fade']},
+  {e:'🎭',n:'Blockbuster',   d:'Teal & Orange · Hollywood',    s:{selFmt:'mp4',selRes:'1920x1080',selLut:'teal',      rCC:'85',rBR:'18',rSpeed:'100',rExp:'0', rCon:'18',rSat:'10',rShad:'10',rHigh:'-10'},chips:['sharpen','vignette']},
+  {e:'❄️',n:'Nordic Cold',   d:'Cool blue · crisp & sharp',    s:{selFmt:'mp4',selRes:'1920x1080',selLut:'cold',      rCC:'70',rBR:'12',rSpeed:'100',rExp:'-3',rCon:'10',rSat:'-15',rShad:'5',rHigh:'-5'}, chips:['sharpen']},
+  {e:'🐌',n:'Slow Motion',   d:'0.5× speed · cinematic',       s:{selFmt:'mp4',selRes:'src',      selLut:'cinematic', rCC:'65',rBR:'14',rSpeed:'50', rExp:'-3',rCon:'10',rSat:'-5', rShad:'5', rHigh:'-5'}, chips:['vignette']},
+  {e:'🌸',n:'Anime Vivid',   d:'Punchy · saturated · sharp',   s:{selFmt:'mp4',selRes:'1920x1080',selLut:'anime',     rCC:'90',rBR:'14',rSpeed:'100',rExp:'5', rCon:'15',rSat:'40',rShad:'-3',rHigh:'3'},  chips:['sharpen']},
+  {e:'💎',n:'4K Ultra Crisp', d:'Max quality · TikTok/YT ready',s:{selFmt:'mp4',selRes:'3840x2160',selLut:'none',      rCC:'0', rBR:'50',rSpeed:'100',rExp:'3', rCon:'20',rSat:'12',rShad:'8', rHigh:'-5'}, chips:['sharpen']},
+  {e:'📲',n:'TikTok Ready',   d:'1080p · punchy · upload safe',  s:{selFmt:'mp4',selRes:'1920x1080',selLut:'vibrant',   rCC:'55',rBR:'30',rSpeed:'100',rExp:'5', rCon:'18',rSat:'18',rShad:'5', rHigh:'-5'}, chips:['sharpen']},
+  {e:'▶️',n:'YouTube Ready',  d:'1080p · cinematic · clean',     s:{selFmt:'mp4',selRes:'1920x1080',selLut:'cinematic', rCC:'60',rBR:'35',rSpeed:'100',rExp:'2', rCon:'15',rSat:'5', rShad:'6', rHigh:'-6'}, chips:['sharpen','vignette']},
+];
+
+document.getElementById('presetsGrid').innerHTML = PRESETS.map((p,i)=>{
+  const isFeatured = i >= 8; // new quality presets
+  const badge = p.n==='4K Ultra Crisp' ? '<span class="preset-badge">4K</span>' :
+                p.n==='TikTok Ready'   ? '<span class="preset-badge">TikTok</span>' :
+                p.n==='YouTube Ready'  ? '<span class="preset-badge">YT</span>' : '';
+  return `<div class="preset-card${isFeatured?' featured-preset':''}" onclick="applyPreset(${i})" style="animation:fup .4s ${i*.04}s ease both">
+    ${badge}
+    <span class="preset-emoji">${p.e}</span>
+    <div class="preset-name">${p.n}</div>
+    <div class="preset-desc">${p.d}</div>
+  </div>`;
+}).join('');
+
+function applyPreset(i){
+  const p=PRESETS[i];
+  Object.entries(p.s).forEach(([k,v])=>{const el=document.getElementById(k);if(el){el.value=v;el.dispatchEvent(new Event('input'));}});
+  document.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));
+  (p.chips||[]).forEach(v=>{const c=document.querySelector(`.chip[data-v="${v}"]`);if(c)c.classList.add('on');});
+  toast('✨ Preset applied!','ok');
+  document.querySelector('.editor-section').scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+// ─── FILE ─────────────────────────────────────────────────────────
+let curFile=null, busy=false;
+const fileInput=document.getElementById('fileInput');
+const dropZone=document.getElementById('dropZone');
+const filePreview=document.getElementById('filePreview');
+const videoEl=document.getElementById('videoEl');
+
+dropZone.addEventListener('click',()=>fileInput.click());
+fileInput.addEventListener('change',e=>{const f=e.target.files[0];if(f)loadFile(f);});
+dropZone.addEventListener('dragover',e=>{e.preventDefault();dropZone.classList.add('over');});
+dropZone.addEventListener('dragleave',()=>dropZone.classList.remove('over'));
+dropZone.addEventListener('drop',e=>{e.preventDefault();dropZone.classList.remove('over');const f=e.dataTransfer.files[0];if(f)loadFile(f);});
+document.addEventListener('dragover',e=>e.preventDefault());
+document.addEventListener('drop',e=>{e.preventDefault();const f=e.dataTransfer&&e.dataTransfer.files[0];if(f&&f.type.startsWith('video/'))loadFile(f);});
+
+function loadFile(f){
+  if(!f.type.startsWith('video/')){toast('⚠ Please choose a video file','err');return;}
+  curFile=f;
+  const url=URL.createObjectURL(f);
+  if(videoEl.src&&videoEl.src.startsWith('blob:'))URL.revokeObjectURL(videoEl.src);
+  videoEl.src=url; videoEl.load();
+  dropZone.style.display='none'; filePreview.classList.add('show');
+  document.getElementById('vidStatus').textContent='Original';
+  document.getElementById('vidStatus').className='vid-status vs-orig';
+  document.getElementById('fiName').textContent=f.name;
+  document.getElementById('fiSize').textContent=fmtSize(f.size);
+  document.getElementById('fiDur').textContent='—'; document.getElementById('fiDims').textContent='—';
+  document.getElementById('dlBtn').classList.remove('show');
+  document.getElementById('sizePill').classList.remove('show');
+  videoEl.onloadedmetadata=()=>{
+    document.getElementById('fiDur').textContent=fmtDur(videoEl.duration);
+    document.getElementById('fiDims').textContent=videoEl.videoWidth?`${videoEl.videoWidth}×${videoEl.videoHeight}`:'';
+    document.getElementById('pbTitle').textContent=f.name;
+    document.getElementById('pbSub').textContent=`${fmtDur(videoEl.duration)} · ${fmtSize(f.size)} — ready to process`;
+  };
+  document.getElementById('procBtn').disabled=false;
+  toast('✅ Video loaded!','ok');
+  setTimeout(()=>document.querySelector('.editor-section').scrollIntoView({behavior:'smooth',block:'start'}),200);
+}
+function clearFile(){
+  curFile=null;
+  if(videoEl.src&&videoEl.src.startsWith('blob:'))URL.revokeObjectURL(videoEl.src);
+  videoEl.src=''; fileInput.value='';
+  filePreview.classList.remove('show'); dropZone.style.display='';
+  document.getElementById('procBtn').disabled=true;
+  document.getElementById('dlBtn').classList.remove('show');
+  document.getElementById('sizePill').classList.remove('show');
+  document.getElementById('pbTitle').textContent='Ready to process';
+  document.getElementById('pbSub').textContent='Drop a video above, configure your settings, then click Process.';
+  toast('🗑 File removed');
+}
+function openModal(id){document.getElementById(id).classList.add('open');}
+function closeModal(id){document.getElementById(id).classList.remove('open');}
+document.querySelectorAll('.modal-bg').forEach(m=>m.addEventListener('click',e=>{if(e.target===m)m.classList.remove('open');}));
+
+// ─── AUTH + PRO SYSTEM ───────────────────────────────────────────
+// Firebase handles real auth. Pro status is stored in Firestore
+// per user, falling back to localStorage for non-signed-in users.
+
+const STRIPE_LINK = 'https://buy.stripe.com/test_dRm4gy3G2dBLfFg4NJfMA00';
+
+window._currentUser  = null;
+window._userProfile  = {};
+window._authReady    = false;
+
+// Called by Firebase module when auth state changes
+window.onAuthReady = function(user) {
+  window._authReady = true;
+  window._currentUser = user;
+  updateNavForUser(user);
+  applyProUI();
+};
+
+function currentUser()  { return window._currentUser; }
+function userProfile()  { return window._userProfile || {}; }
+
+function isPro() {
+  // Check Firestore profile first (most trusted)
+  if (userProfile().isPro) return true;
+  // Fall back to localStorage for users who activated before signing in
+  return localStorage.getItem('sv_pro_code') !== null;
+}
+
+function getProCode() {
+  return userProfile().proCode || localStorage.getItem('sv_pro_code') || '';
+}
+
+// ── Write pro status to Firestore for signed-in users ────────────
+async function saveProToFirestore(code) {
+  const fb = window._fb;
+  const user = currentUser();
+  if (!fb || !user) return;
+  try {
+    await fb.setDoc(fb.doc(fb.db, 'users', user.uid), {
+      isPro:     true,
+      proCode:   code,
+      proSince:  fb.serverTimestamp(),
+      email:     user.email,
+      name:      user.displayName || '',
+    }, { merge: true });
+    window._userProfile.isPro   = true;
+    window._userProfile.proCode = code;
+  } catch(e) {
+    console.error('Firestore write failed:', e);
+  }
+}
+
+async function removeProFromFirestore() {
+  const fb = window._fb;
+  const user = currentUser();
+  if (!fb || !user) return;
+  try {
+    await fb.setDoc(fb.doc(fb.db, 'users', user.uid), {
+      isPro: false, proCode: null
+    }, { merge: true });
+    window._userProfile.isPro   = false;
+    window._userProfile.proCode = null;
+  } catch(e) { console.error(e); }
+}
+
+// ── Create user record in Firestore on first sign-up ─────────────
+async function createUserRecord(user) {
+  const fb = window._fb;
+  if (!fb) return;
+  const ref = fb.doc(fb.db, 'users', user.uid);
+  const snap = await fb.getDoc(ref);
+  if (!snap.exists()) {
+    await fb.setDoc(ref, {
+      email:     user.email,
+      name:      user.displayName || '',
+      isPro:     false,
+      createdAt: fb.serverTimestamp(),
+    });
+  }
+}
+
+// ── Nav update ────────────────────────────────────────────────────
+function updateNavForUser(user) {
+  const signInBtn  = document.getElementById('navSignInBtn');
+  const userMenu   = document.getElementById('navUserMenu');
+  const proBtn     = document.getElementById('navProBtn');
+
+  if (user) {
+    if (signInBtn) signInBtn.style.display = 'none';
+    if (userMenu)  userMenu.style.display  = '';
+    // Avatar initials
+    const name = user.displayName || user.email || '?';
+    const initials = name.split(' ').map(w=>w[0]).join('').substring(0,2).toUpperCase();
+    const navCircle = document.getElementById('navAvatarCircle');
+    const navName   = document.getElementById('navUserName');
+    if (navCircle) navCircle.textContent = initials;
+    if (navName)   navName.textContent   = name.split(' ')[0] || 'Account';
+    // Dropdown
+    const ddName  = document.getElementById('ddName');
+    const ddEmail = document.getElementById('ddEmail');
+    if (ddName)  ddName.textContent  = user.displayName || 'Account';
+    if (ddEmail) ddEmail.textContent = user.email || '';
+  } else {
+    if (signInBtn) signInBtn.style.display = '';
+    if (userMenu)  userMenu.style.display  = 'none';
+  }
+}
+
+function applyProUI() {
+  const pro = isPro();
+  // Nav Pro button
+  const navBtn = document.getElementById('navProBtn');
+  if (navBtn) {
+    navBtn.innerHTML = pro ? '✓ Pro Active' : '✨ Go Pro';
+    navBtn.className = pro ? 'btn-pro is-pro' : 'btn-pro';
+  }
+  // Dropdown pro badge & label
+  const ddBadge = document.getElementById('ddProBadge');
+  const ddLabel = document.getElementById('ddProLabel');
+  if (ddBadge) ddBadge.style.display = pro ? '' : 'none';
+  if (ddLabel) ddLabel.textContent   = pro ? 'Pro Active ✓' : 'Upgrade to Pro';
+  // Resolution: lock 4K if not pro
+  const resOpt4K = document.querySelector('#selRes option[value="3840x2160"]');
+  if (resOpt4K) {
+    resOpt4K.disabled    = !pro;
+    resOpt4K.textContent = pro ? '4K — 3840×2160' : '4K — 3840×2160 🔒 Pro';
+  }
+  // Bitrate cap
+  const rBR = document.getElementById('rBR');
+  if (rBR) {
+    if (pro) {
+      rBR.max = '50';
+    } else {
+      rBR.max = '20';
+      if (parseInt(rBR.value) > 20) { rBR.value = '20'; rBR.dispatchEvent(new Event('input')); }
+    }
+  }
+}
+
+// ── Auth modal helpers ────────────────────────────────────────────
+function openAuthModal() {
+  showSignInView();
+  openModal('authModal');
+}
+
+function showSignInView() {
+  ['authSignInView','authSignUpView','authForgotView','authForgotSentView'].forEach(id=>{
+    const el = document.getElementById(id);
+    if (el) el.style.display = id==='authSignInView' ? '' : 'none';
+  });
+  clearAuthErrors();
+}
+function showSignUpView() {
+  ['authSignInView','authSignUpView','authForgotView','authForgotSentView'].forEach(id=>{
+    const el = document.getElementById(id);
+    if (el) el.style.display = id==='authSignUpView' ? '' : 'none';
+  });
+  clearAuthErrors();
+}
+function showForgotView() {
+  ['authSignInView','authSignUpView','authForgotView','authForgotSentView'].forEach(id=>{
+    const el = document.getElementById(id);
+    if (el) el.style.display = id==='authForgotView' ? '' : 'none';
+  });
+  clearAuthErrors();
+}
+function showForgotSentView() {
+  ['authSignInView','authSignUpView','authForgotView','authForgotSentView'].forEach(id=>{
+    const el = document.getElementById(id);
+    if (el) el.style.display = id==='authForgotSentView' ? '' : 'none';
+  });
+}
+function clearAuthErrors() {
+  ['siError','suError','fpError'].forEach(id=>{
+    const el = document.getElementById(id);
+    if (el) { el.textContent=''; el.classList.remove('show'); }
+  });
+  document.querySelectorAll('.auth-input').forEach(i=>i.classList.remove('err'));
+}
+function showAuthError(id, msg) {
+  const el = document.getElementById(id);
+  if (el) { el.textContent=msg; el.classList.add('show'); }
+}
+
+function friendlyFirebaseError(code) {
+  const map = {
+    'auth/invalid-email':           'Please enter a valid email address.',
+    'auth/user-not-found':          'No account found with this email.',
+    'auth/wrong-password':          'Incorrect password. Try again or reset it.',
+    'auth/email-already-in-use':    'An account with this email already exists.',
+    'auth/weak-password':           'Password must be at least 8 characters.',
+    'auth/too-many-requests':       'Too many attempts. Please wait a moment.',
+    'auth/popup-closed-by-user':    'Sign-in popup was closed. Please try again.',
+    'auth/network-request-failed':  'Network error. Check your connection.',
+    'auth/invalid-credential':      'Incorrect email or password.',
+  };
+  return map[code] || 'Something went wrong. Please try again.';
+}
+
+function setAuthBtnLoading(id, loading) {
+  const btn = document.getElementById(id);
+  if (!btn) return;
+  btn.disabled = loading;
+  btn.style.opacity = loading ? '0.7' : '1';
+}
+
+// ── Sign In ───────────────────────────────────────────────────────
+async function doSignIn() {
+  const fb = window._fb;
+  if (!fb) { showAuthError('siError', 'Firebase not configured yet. See setup instructions.'); return; }
+
+  const email = document.getElementById('siEmail').value.trim();
+  const pass  = document.getElementById('siPassword').value;
+  if (!email || !pass) {
+    showAuthError('siError', 'Please enter your email and password.');
+    return;
+  }
+  clearAuthErrors();
+  setAuthBtnLoading('siBtnSubmit', true);
+  try {
+    await fb.signInWithEmailAndPassword(fb.auth, email, pass);
+    closeModal('authModal');
+    toast('👋 Welcome back!', 'ok');
+  } catch(e) {
+    showAuthError('siError', friendlyFirebaseError(e.code));
+  }
+  setAuthBtnLoading('siBtnSubmit', false);
+}
+
+// ── Sign Up ───────────────────────────────────────────────────────
+async function doSignUp() {
+  const fb = window._fb;
+  if (!fb) { showAuthError('suError', 'Firebase not configured yet. See setup instructions.'); return; }
+
+  const name  = document.getElementById('suName').value.trim();
+  const email = document.getElementById('suEmail').value.trim();
+  const pass  = document.getElementById('suPassword').value;
+
+  if (!name)  { showAuthError('suError','Please enter your name.'); return; }
+  if (!email) { showAuthError('suError','Please enter your email.'); return; }
+  if (pass.length < 8) { showAuthError('suError','Password must be at least 8 characters.'); return; }
+
+  clearAuthErrors();
+  setAuthBtnLoading('suBtnSubmit', true);
+  try {
+    const cred = await fb.createUserWithEmailAndPassword(fb.auth, email, pass);
+    await fb.updateProfile(cred.user, { displayName: name });
+    await createUserRecord(cred.user);
+    closeModal('authModal');
+    toast('🎉 Account created! Welcome to SmartVideo.', 'ok');
+  } catch(e) {
+    showAuthError('suError', friendlyFirebaseError(e.code));
+  }
+  setAuthBtnLoading('suBtnSubmit', false);
+}
+
+// ── Google Sign In ────────────────────────────────────────────────
+async function doGoogleSignIn() {
+  const fb = window._fb;
+  if (!fb) { toast('Firebase not configured yet.', 'err'); return; }
+  try {
+    const result = await fb.signInWithPopup(fb.auth, fb.googleProvider);
+    await createUserRecord(result.user);
+    closeModal('authModal');
+    toast('👋 Signed in with Google!', 'ok');
+  } catch(e) {
+    const errId = document.getElementById('suError') ? 'suError' : 'siError';
+    showAuthError(errId, friendlyFirebaseError(e.code));
+  }
+}
+
+// ── Forgot Password ───────────────────────────────────────────────
+async function doForgotPassword() {
+  const fb = window._fb;
+  if (!fb) return;
+  const email = document.getElementById('fpEmail').value.trim();
+  if (!email) { showAuthError('fpError','Please enter your email address.'); return; }
+  clearAuthErrors();
+  try {
+    await fb.sendPasswordResetEmail(fb.auth, email);
+    showForgotSentView();
+  } catch(e) {
+    showAuthError('fpError', friendlyFirebaseError(e.code));
+  }
+}
+
+// ── Sign Out ──────────────────────────────────────────────────────
+async function doSignOut() {
+  const fb = window._fb;
+  closeUserDropdown();
+  closeModal('accountModal');
+  if (fb) {
+    try { await fb.signOut(fb.auth); } catch(e) {}
+  }
+  window._userProfile = {};
+  window._currentUser = null;
+  updateNavForUser(null);
+  applyProUI();
+  toast('Signed out. See you next time!');
+}
+
+// ── Account modal ─────────────────────────────────────────────────
+function openAccountModal() {
+  closeUserDropdown();
+  const user = currentUser();
+  if (!user) { openAuthModal(); return; }
+
+  const name = user.displayName || user.email || 'Account';
+  const initials = name.split(' ').map(w=>w[0]).join('').substring(0,2).toUpperCase();
+
+  document.getElementById('acctAvatarBig').textContent  = initials;
+  document.getElementById('acctName').textContent       = user.displayName || 'Account';
+  document.getElementById('acctEmail').textContent      = user.email || '';
+  document.getElementById('acctUID').textContent        = user.uid;
+  // Member since
+  const created = user.metadata && user.metadata.creationTime
+    ? new Date(user.metadata.creationTime).toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})
+    : 'Unknown';
+  document.getElementById('acctCreated').textContent = created;
+
+  // Pro card
+  const proCard   = document.getElementById('acctProCard');
+  const planName  = document.getElementById('acctPlanName');
+  const upgradeBtn = document.getElementById('acctUpgradeBtn');
+  if (isPro()) {
+    proCard.style.background   = 'rgba(26,158,92,.05)';
+    proCard.style.borderColor  = 'rgba(26,158,92,.3)';
+    planName.textContent       = '✓ Pro';
+    planName.style.color       = 'var(--green)';
+    upgradeBtn.textContent     = 'Manage Pro';
+    upgradeBtn.onclick         = () => { closeModal('accountModal'); handleProClick(); };
+  } else {
+    proCard.style.background  = '';
+    proCard.style.borderColor = 'var(--border)';
+    planName.textContent      = 'Free';
+    planName.style.color      = 'var(--ink)';
+    upgradeBtn.innerHTML      = '✨ Upgrade';
+    upgradeBtn.onclick        = () => { closeModal('accountModal'); handleProClick(); };
+  }
+  openModal('accountModal');
+}
+
+// ── User dropdown ─────────────────────────────────────────────────
+function toggleUserDropdown() {
+  const dd = document.getElementById('userDropdown');
+  if (dd) dd.classList.toggle('open');
+}
+function closeUserDropdown() {
+  const dd = document.getElementById('userDropdown');
+  if (dd) dd.classList.remove('open');
+}
+document.addEventListener('click', e => {
+  const wrap = document.getElementById('navUserMenu');
+  if (wrap && !wrap.contains(e.target)) closeUserDropdown();
+});
+
+// ── Pro modal flow ────────────────────────────────────────────────
+function handleProClick() {
+  if (isPro()) {
+    showActiveView();
+    openModal('proModal');
+  } else {
+    showPayView();
+    openModal('proModal');
+  }
+}
+function showPayView() {
+  ['proPayView','proActivateView','proActiveView'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el) el.style.display = id==='proPayView' ? '' : 'none';
+  });
+}
+function showActivateView() {
+  ['proPayView','proActivateView','proActiveView'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el) el.style.display = id==='proActivateView' ? '' : 'none';
+  });
+  setTimeout(()=>{ const i=document.getElementById('proCodeInput'); if(i) i.focus(); },100);
+}
+function showActiveView() {
+  ['proPayView','proActivateView','proActiveView'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el) el.style.display = id==='proActiveView' ? '' : 'none';
+  });
+  const code = getProCode();
+  const disp = document.getElementById('proCodeDisplay');
+  if(disp) disp.textContent = code ? code.substring(0,28)+'…' : 'Active';
+}
+function goToStripe() {
+  window.open(STRIPE_LINK, '_blank');
+  setTimeout(showActivateView, 800);
+}
+async function activatePro() {
+  const input = document.getElementById('proCodeInput');
+  const code  = input ? input.value.trim() : '';
+  if (!code || code.length < 8) {
+    if(input){ input.classList.add('err'); input.focus(); }
+    return;
+  }
+  // Save to Firestore if signed in, also localStorage as backup
+  localStorage.setItem('sv_pro_code', code);
+  await saveProToFirestore(code);
+  applyProUI();
+  showActiveView();
+  toast('🎉 Pro activated! Watermark removed.', 'ok');
+}
+async function revokePro() {
+  if (!confirm('Remove Pro from this account?')) return;
+  localStorage.removeItem('sv_pro_code');
+  await removeProFromFirestore();
+  applyProUI();
+  showPayView();
+  toast('Pro removed.');
+}
+
+// ── Init ──────────────────────────────────────────────────────────
+// If Firebase module hasn't fired yet, show sensible defaults
+applyProUI();
+
+// ─── WEBGL ────────────────────────────────────────────────────────
+const GLC = document.getElementById('glCanvas');
+let gl=null, prog=null, uLoc={}, vTex=null;
+
+// VERTEX shader — full-screen quad
+const VS = `
+attribute vec2 p;
+varying vec2 uv;
+void main(){
+  uv = p * 0.5 + 0.5;
+  uv.y = 1.0 - uv.y;
+  gl_Position = vec4(p, 0.0, 1.0);
+}`;
+
+// FRAGMENT shader — every effect carefully range-checked so nothing blows out
+const FS = `
+precision highp float;
+uniform sampler2D tex;
+
+// All uniforms arrive pre-scaled to sensible float ranges (see setUniforms below)
+uniform float uExp;    // -1.0 .. +1.0  (EV stops, applied as pow(2,x))
+uniform float uCon;    // -0.5 .. +0.5  (added to pivot-based contrast)
+uniform float uSat;    // -1.0 .. +1.0  (0 = no change, -1 = b&w, +1 = double)
+uniform float uShad;   // -0.4 .. +0.4  (shadow lift/lower)
+uniform float uHigh;   // -0.4 .. +0.4  (highlight pull/push)
+uniform float uLut;    // 0..10 (LUT index)
+uniform float uLutI;   // 0..1  (LUT blend strength)
+uniform float uVig;    // 0 or 1
+uniform float uGrain;  // 0 or 1
+uniform float uSharpen;// 0 or 1
+uniform float uFade;   // 0 or 1
+uniform vec2  uRes;    // canvas width/height
+uniform float uTime;   // seconds (for grain animation)
+varying vec2 uv;
+
+float luma(vec3 c){ return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+
+// ── HSL helpers ──────────────────────────────────────────────────
+vec3 rgb2hsl(vec3 c){
+  float mx=max(c.r,max(c.g,c.b)), mn=min(c.r,min(c.g,c.b)), d=mx-mn;
+  float h=0.,s=0.,l=(mx+mn)*0.5;
+  if(d>0.001){
+    s = l>0.5 ? d/(2.0-mx-mn) : d/(mx+mn);
+    if(mx==c.r)      h = mod((c.g-c.b)/d, 6.0);
+    else if(mx==c.g) h = (c.b-c.r)/d + 2.0;
+    else             h = (c.r-c.g)/d + 4.0;
+    h /= 6.0;
+  }
+  return vec3(h, s, l);
+}
+float hq(float p,float q,float t){
+  if(t<0.)t+=1.; if(t>1.)t-=1.;
+  if(t<0.1667) return p+(q-p)*6.0*t;
+  if(t<0.5)    return q;
+  if(t<0.6667) return p+(q-p)*(0.6667-t)*6.0;
+  return p;
+}
+vec3 hsl2rgb(vec3 c){
+  if(c.y<0.001) return vec3(c.z);
+  float q=c.z<0.5?c.z*(1.0+c.y):c.z+c.y-c.z*c.y, p=2.0*c.z-q;
+  return vec3(hq(p,q,c.x+0.3333), hq(p,q,c.x), hq(p,q,c.x-0.3333));
+}
+
+// ── Tone curve: pivot-based S-curve ──────────────────────────────
+// con: -0.5 (flat) .. 0 (neutral) .. +0.5 (strong S)
+// Uses a simple adjustable gamma around 0.5 midpoint
+vec3 toneCurve(vec3 c, float con){
+  if(abs(con)<0.001) return c;
+  // Map to contrast: positive = steeper, negative = flatter
+  float gamma = con > 0.0 ? 1.0/(1.0+con*1.5) : 1.0+(-con)*1.5;
+  // Apply around 0.5 pivot
+  vec3 lo = pow(c*2.0, vec3(gamma))*0.5;
+  vec3 hi = 1.0 - pow((1.0-c)*2.0, vec3(gamma))*0.5;
+  return clamp(mix(lo, hi, step(0.5, c)), 0.0, 1.0);
+}
+
+// ── Shadow / Highlight ────────────────────────────────────────────
+vec3 shadowHighlight(vec3 c, float shad, float high){
+  float l = luma(c);
+  // Shadow: only affects darks (l < 0.4), tapers to zero at midtones
+  float sf = clamp(1.0 - l/0.45, 0.0, 1.0);
+  // Highlight: only affects brights (l > 0.6)
+  float hf = clamp((l - 0.55)/0.45, 0.0, 1.0);
+  return clamp(c + shad*sf*0.6 - high*hf*0.6, 0.0, 1.0);
+}
+
+// ── LUT colour toning — all deltas kept small and clamped ─────────
+vec3 applyLUT(vec3 c, float lut, float t){
+  if(lut < 0.5 || t < 0.01) return c;
+  float l = luma(c);
+  vec3 o = c;
+
+  if(lut < 1.5){
+    // CINEMATIC: warm shadows (lift R/G in darks), cool highs (push B in brights)
+    float shadow = clamp(1.0-l*2.5, 0.0, 1.0);
+    float highlight = clamp(l*2.5-1.5, 0.0, 1.0);
+    o += vec3(0.06, 0.03, -0.02)*shadow*t;
+    o += vec3(-0.02, -0.01, 0.05)*highlight*t;
+  } else if(lut < 2.5){
+    // VINTAGE: sepia cast + lifted blacks (faded)
+    vec3 sepia = vec3(
+      dot(c, vec3(0.393, 0.769, 0.189)),
+      dot(c, vec3(0.349, 0.686, 0.168)),
+      dot(c, vec3(0.272, 0.534, 0.131))
+    );
+    o = mix(c, sepia, t*0.65);
+    o = o + (1.0-o)*t*0.07; // lift blacks = faded/matte
+  } else if(lut < 3.5){
+    // VIBRANT: hue-preserve saturation boost handled in saturation step
+    // Add slight warmth in mids
+    o += vec3(0.03, 0.01, -0.02)*t*smoothstep(0.2, 0.7, l);
+  } else if(lut < 4.5){
+    // B&W: desaturate to luma (saturation uniform handles this, just reinforce)
+    o = vec3(l);
+  } else if(lut < 5.5){
+    // NOIR: luma + deep blacks + roll highlights
+    float g = l;
+    // Deepen shadows
+    g = g < 0.3 ? g*(0.8+0.2*(1.0-t)) : g;
+    // Roll highlights
+    g = g > 0.75 ? mix(g, 0.75+(g-0.75)*0.7, t) : g;
+    o = mix(c, vec3(g), t);
+  } else if(lut < 6.5){
+    // TEAL & ORANGE: shadows teal, highlights orange
+    float shadow = clamp(1.0-l/0.4, 0.0, 1.0);
+    float highlight = clamp((l-0.6)/0.4, 0.0, 1.0);
+    o += vec3(-0.06, 0.04, 0.08)*shadow*t;
+    o += vec3(0.08, 0.02, -0.07)*highlight*t;
+  } else if(lut < 7.5){
+    // COLD: push blue channel, pull red
+    o += vec3(-0.04, -0.01, 0.07)*t;
+  } else if(lut < 8.5){
+    // WARM: golden push
+    o += vec3(0.07, 0.03, -0.05)*t;
+  } else if(lut < 9.5){
+    // HORROR: desaturate + red push + darken
+    vec3 grey = vec3(l);
+    o = mix(c, grey, t*0.6);
+    o.r = clamp(o.r + t*0.1, 0.0, 1.0);
+    o.b = clamp(o.b - t*0.07, 0.0, 1.0);
+  } else {
+    // ANIME: punch up reds and blues slightly for that illustrated pop
+    o.r = clamp(o.r + t*0.04, 0.0, 1.0);
+    o.b = clamp(o.b + t*0.03, 0.0, 1.0);
+  }
+  return clamp(o, 0.0, 1.0);
+}
+
+// ── Pseudo-random for grain ───────────────────────────────────────
+float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7)))*43758.545); }
+
+void main(){
+  vec3 c = texture2D(tex, uv).rgb;
+
+  // 1. EXPOSURE — pow(2, ev) is the photographic formula; safe because ev is -1..+1
+  c = clamp(c * pow(2.0, uExp), 0.0, 1.0);
+
+  // 2. SHADOW / HIGHLIGHT — small deltas, region-masked
+  c = shadowHighlight(c, uShad, uHigh);
+
+  // 3. CONTRAST — pivot-based S-curve, con is -0.5..+0.5
+  c = toneCurve(c, uCon);
+
+  // 4. SATURATION — in HSL, safe range 0..2
+  vec3 hsl = rgb2hsl(c);
+  float satMult = clamp(1.0 + uSat, 0.0, 2.5);
+  hsl.y = clamp(hsl.y * satMult, 0.0, 1.0);
+  c = hsl2rgb(hsl);
+
+  // 5. LUT colour toning
+  c = applyLUT(c, uLut, uLutI);
+
+  // 6. SHARPEN — unsharp mask via neighbouring pixels (3x3 kernel approx)
+  if(uSharpen > 0.5){
+    vec2 px = 1.0/uRes;
+    vec3 blur =
+      texture2D(tex, uv+vec2(-px.x,-px.y)).rgb * 0.075 +
+      texture2D(tex, uv+vec2( 0.0, -px.y)).rgb * 0.125 +
+      texture2D(tex, uv+vec2( px.x,-px.y)).rgb * 0.075 +
+      texture2D(tex, uv+vec2(-px.x,  0.0)).rgb * 0.125 +
+      texture2D(tex, uv                  ).rgb * 0.200 +
+      texture2D(tex, uv+vec2( px.x,  0.0)).rgb * 0.125 +
+      texture2D(tex, uv+vec2(-px.x, px.y)).rgb * 0.075 +
+      texture2D(tex, uv+vec2( 0.0,  px.y)).rgb * 0.125 +
+      texture2D(tex, uv+vec2( px.x, px.y)).rgb * 0.075;
+    // Unsharp mask: original + amount*(original - blur)
+    c = clamp(c + (c - blur) * 1.2, 0.0, 1.0);
+  }
+
+  // 7. FADE (matte/lifted-blacks look)
+  if(uFade > 0.5){
+    c = c * 0.82 + 0.08;
+  }
+
+  // 8. FILM GRAIN — subtle, time-varying
+  if(uGrain > 0.5){
+    float g = (hash(uv + fract(vec2(uTime*0.1, uTime*0.07))) - 0.5) * 0.045;
+    c = clamp(c + g, 0.0, 1.0);
+  }
+
+  // 9. VIGNETTE — smooth oval falloff, no hard edges
+  if(uVig > 0.5){
+    vec2 vc = (uv - 0.5) * vec2(1.6, 1.0); // wider x to make oval
+    float d = dot(vc, vc);
+    float vig = smoothstep(0.25, 1.1, d);
+    c *= 1.0 - vig * 0.72;
+  }
+
+  gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+}`;
+
+function initGL(w, h){
+  GLC.width=w; GLC.height=h;
+  gl = GLC.getContext('webgl', {
+    preserveDrawingBuffer:true, antialias:false,
+    alpha:false, powerPreference:'high-performance'
+  });
+  if(!gl){ console.warn('WebGL unavailable'); return false; }
+
+  function mkS(type, src){
+    const s=gl.createShader(type);
+    gl.shaderSource(s,src); gl.compileShader(s);
+    if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)){
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+      return null;
+    }
+    return s;
+  }
+
+  const v=mkS(gl.VERTEX_SHADER,VS), f=mkS(gl.FRAGMENT_SHADER,FS);
+  if(!v||!f) return false;
+
+  prog=gl.createProgram();
+  gl.attachShader(prog,v); gl.attachShader(prog,f); gl.linkProgram(prog);
+  if(!gl.getProgramParameter(prog,gl.LINK_STATUS)){
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+    return false;
+  }
+  gl.useProgram(prog);
+
+  // Full-screen quad
+  const buf=gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER,buf);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,-1,1,1,-1,1]),gl.STATIC_DRAW);
+  const ap=gl.getAttribLocation(prog,'p');
+  gl.enableVertexAttribArray(ap);
+  gl.vertexAttribPointer(ap,2,gl.FLOAT,false,0,0);
+
+  // Video texture
+  vTex=gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D,vTex);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+
+  // Cache uniform locations
+  ['uExp','uCon','uSat','uShad','uHigh','uLut','uLutI',
+   'uVig','uGrain','uSharpen','uFade','uRes','uTime'
+  ].forEach(n=>{ uLoc[n]=gl.getUniformLocation(prog,n); });
+
+  gl.activeTexture(gl.TEXTURE0);
+  gl.uniform1i(gl.getUniformLocation(prog,'tex'), 0);
+  gl.viewport(0,0,w,h);
+  return true;
+}
+
+const LUT_IDX = {none:0,cinematic:1,vintage:2,vibrant:3,bw:4,noir:5,teal:6,cold:7,warm:8,horror:9,anime:10};
+
+function glRender(vidEl, s, t){
+  gl.bindTexture(gl.TEXTURE_2D, vTex);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,vidEl);
+
+  // ── These conversions are the KEY FIX ──
+  // Sliders are -100..+100 integers. We convert each to a safe float range
+  // that the shader uses directly without any unexpected amplification.
+  gl.uniform1f(uLoc.uExp,    s.expRaw  / 100.0);         // -1..+1 EV stops
+  gl.uniform1f(uLoc.uCon,    s.conRaw  / 200.0);         // -0.5..+0.5 contrast pivot
+  gl.uniform1f(uLoc.uSat,    s.satRaw  / 100.0);         // -1..+1 sat delta
+  gl.uniform1f(uLoc.uShad,   s.shadRaw / 250.0);         // -0.4..+0.4 shadow shift
+  gl.uniform1f(uLoc.uHigh,   s.highRaw / 250.0);         // -0.4..+0.4 highlight shift
+  gl.uniform1f(uLoc.uLut,    s.lutIdx);
+  gl.uniform1f(uLoc.uLutI,   s.lutI);
+  gl.uniform1f(uLoc.uVig,    s.chips.includes('vignette') ? 1.0 : 0.0);
+  gl.uniform1f(uLoc.uGrain,  s.chips.includes('grain')    ? 1.0 : 0.0);
+  gl.uniform1f(uLoc.uSharpen,s.chips.includes('sharpen')  ? 1.0 : 0.0);
+  gl.uniform1f(uLoc.uFade,   s.chips.includes('fade')     ? 1.0 : 0.0);
+  gl.uniform2f(uLoc.uRes,    GLC.width, GLC.height);
+  gl.uniform1f(uLoc.uTime,   t / 1000.0);
+
+  gl.drawArrays(gl.TRIANGLES, 0, 6);
+  gl.flush();
+}
+
+// ─── WATERMARK CANVAS ─────────────────────────────────────────────
+const wmCanvas = document.createElement('canvas');
+const wmCtx = wmCanvas.getContext('2d');
+let wmW=0, wmH=0;
+function buildWatermark(w, h){
+  if(wmW===w && wmH===h && wmWasPro===isPro()) return;
+  wmW=w; wmH=h; wmWasPro=isPro();
+  wmCanvas.width=w; wmCanvas.height=h;
+  wmCtx.clearRect(0,0,w,h);
+  // Pro users get no watermark
+  if(isPro()) return;
+  const fs = Math.max(11, Math.round(w * 0.014));
+  wmCtx.font = `700 ${fs}px Outfit,sans-serif`;
+  wmCtx.textAlign = 'right';
+  wmCtx.textBaseline = 'bottom';
+  wmCtx.shadowColor = 'rgba(0,0,0,0.7)';
+  wmCtx.shadowBlur = 5;
+  wmCtx.fillStyle = 'rgba(255,255,255,0.45)';
+  wmCtx.fillText('SmartVideo', w - w*0.012, h - h*0.012);
+}
+let wmWasPro = null;
+
+// ─── MAIN PROCESS ─────────────────────────────────────────────────
+function startProcess(){
+  if(!curFile||busy) return;
+  busy=true;
+  const btn=document.getElementById('procBtn');
+  btn.disabled=true; btn.textContent='⏳ Processing…';
+  document.getElementById('progWrap').classList.add('show');
+  document.getElementById('dlBtn').classList.remove('show');
+  document.getElementById('sizePill').classList.remove('show');
+  document.getElementById('pbTitle').textContent='Processing your video…';
+  document.getElementById('pbSub').textContent='GPU color grading — audio locked in sync…';
+
+  pipeline(getSettings())
+    .then(blob => finish(blob))
+    .catch(err => {
+      console.error(err);
+      toast('❌ '+(err.message||String(err)), 'err');
+      document.getElementById('pbTitle').textContent='Something went wrong';
+      document.getElementById('pbSub').textContent = err.message||'';
+      document.getElementById('progWrap').classList.remove('show');
+    })
+    .finally(()=>{ btn.disabled=false; btn.textContent='▶ Process Again'; busy=false; });
+}
+
+async function pipeline(s){
+  return new Promise(async (resolve, reject)=>{
+
+    // ── Source video ──
+    const vid = document.createElement('video');
+    vid.src = URL.createObjectURL(curFile);
+    vid.playsInline = true;
+    vid.playbackRate = s.speed;
+    vid.preload = 'auto';
+    // NOT muted — audio is routed from this same element
+
+    await new Promise((res,rej)=>{
+      vid.oncanplaythrough = res;
+      vid.onerror = ()=>rej(new Error('Failed to load video for processing'));
+      vid.load();
+    });
+
+    const srcW = vid.videoWidth  || 1280;
+    const srcH = vid.videoHeight || 720;
+    const duration = vid.duration;
+
+    // ── Canvas size ──
+    let W=srcW, H=srcH;
+    if(s.res !== 'src'){
+      const [rw,rh] = s.res.split('x').map(Number);
+      const asp = W/H;
+      if(asp > rw/rh){ W=rw; H=Math.round(rw/asp); }
+      else            { H=rh; W=Math.round(rh*asp); }
+    }
+    W = W%2 ? W-1 : W;
+    H = H%2 ? H-1 : H;
+
+    // ── Init WebGL on hidden canvas ──
+    const glOk = initGL(W, H);
+
+    // Output canvas (2D) — composites WebGL result + watermark → MediaRecorder
+    const out = document.createElement('canvas');
+    out.width=W; out.height=H;
+    const outCtx = out.getContext('2d');
+
+    buildWatermark(W, H);
+
+    // ── WebAudio: capture audio from same vid element ──
+    const actx = new (window.AudioContext || window.webkitAudioContext)();
+    await actx.resume();
+    const aSrc  = actx.createMediaElementSource(vid);
+    const gain  = actx.createGain();
+    gain.gain.value = s.keepAudio ? (s.boostAudio ? 1.5 : 1.0) : 0.00001;
+    const aDest = actx.createMediaStreamDestination();
+    aSrc.connect(gain);
+    gain.connect(aDest);
+    gain.connect(actx.destination); // keep context alive
+
+    // ── Combined stream from output canvas ──
+    const stream = out.captureStream(30);
+    const aTrk = aDest.stream.getAudioTracks()[0];
+    if(aTrk) stream.addTrack(aTrk);
+
+    // ── MediaRecorder ──
+    const mime = pickMime(s.fmt);
+    let rec;
+    try      { rec = new MediaRecorder(stream, {mimeType:mime, videoBitsPerSecond:s.bitrate, audioBitsPerSecond:192000}); }
+    catch(e1){ try{ rec = new MediaRecorder(stream, {videoBitsPerSecond:s.bitrate}); }
+               catch(e2){ rec = new MediaRecorder(stream); } }
+
+    const chunks = [];
+    rec.ondataavailable = e => { if(e.data&&e.data.size>0) chunks.push(e.data); };
+
+    let stopped = false;
+    rec.onstop = ()=>{
+      if(stopped) return; stopped=true;
+      actx.close();
+      URL.revokeObjectURL(vid.src);
+      resolve(new Blob(chunks, {type: rec.mimeType||mime||'video/webm'}));
+    };
+    rec.onerror = ()=>{ if(!stopped){ stopped=true; reject(new Error('Recorder error')); } };
+
+    // ── Render loop ──
+    let lastTime = -1;
+
+    function frame(now){
+      if(stopped) return;
+
+      if(vid.ended || vid.currentTime >= duration - 0.04){
+        // Final frame — draw it, wait for encoder to flush, then stop
+        renderFrame(outCtx, vid, s, now, W, H, glOk);
+        vid.pause();
+        // Request final data chunk then stop cleanly
+        if(rec.state==='recording'){
+          rec.requestData();
+          setTimeout(()=>{ if(rec.state==='recording') rec.stop(); }, 800);
+        }
+        setProgress('Finalising…', 99);
+        return;
+      }
+
+      if(vid.currentTime !== lastTime){
+        lastTime = vid.currentTime;
+        renderFrame(outCtx, vid, s, now, W, H, glOk);
+      }
+
+      const pct = Math.min(Math.round((vid.currentTime/duration)*95)+3, 97);
+      setProgress(`${fmtDur(vid.currentTime)} / ${fmtDur(duration)}`, pct);
+      requestAnimationFrame(frame);
+    }
+
+    // Safety watchdog
+    const wd = setTimeout(()=>{
+      if(rec.state==='recording'){ rec.requestData(); setTimeout(()=>rec.stop(),200); }
+    }, (duration/s.speed)*1600 + 60000);
+    const origStop = rec.onstop;
+    rec.onstop = e => { clearTimeout(wd); if(origStop) origStop(e); };
+
+    // ── Warm-up: draw a real frame before recorder starts ──
+    // This primes the canvas stream so the encoder sees valid video immediately.
+    // Without this the first ~1s has no frames → corrupt timestamps.
+    setProgress('Preparing…', 2);
+    vid.currentTime = 0;
+
+    // Wait for seek to settle
+    await new Promise(res => {
+      const onSeeked = () => { vid.removeEventListener('seeked', onSeeked); res(); };
+      vid.addEventListener('seeked', onSeeked);
+      setTimeout(res, 300); // fallback
+    });
+
+    // Draw the first frame onto the output canvas so the stream is warm
+    renderFrame(outCtx, vid, s, performance.now(), W, H, glOk);
+
+    // Give captureStream one rAF tick to register the frame
+    await new Promise(res => requestAnimationFrame(res));
+    await new Promise(res => requestAnimationFrame(res));
+
+    // NOW start the recorder — no timeslice, we call requestData() manually
+    // This is critical: no timeslice = encoder controls its own chunk boundaries
+    // = no artificial timestamp offsets in the output container
+    rec.start();
+
+    // Small settle pause so the recorder's internal clock starts from zero
+    await new Promise(res => setTimeout(res, 80));
+
+    // Kick off playback — audio and video start together from this point
+    vid.play()
+      .then(()=> requestAnimationFrame(frame))
+      .catch(err=>{ if(rec.state==='recording') rec.stop(); reject(err); });
+  });
+}
+
+function renderFrame(outCtx, vid, s, now, W, H, glOk){
+  if(glOk){
+    glRender(vid, s, now);
+    outCtx.drawImage(GLC, 0, 0, W, H); // blit WebGL output into 2D canvas
+  } else {
+    // CSS filter fallback
+    outCtx.filter = build2DFilter(s);
+    outCtx.drawImage(vid, 0, 0, W, H);
+    outCtx.filter = 'none';
+    if(s.chips.includes('vignette')){
+      const rg = outCtx.createRadialGradient(W/2,H/2,H*.28,W/2,H/2,H*.9);
+      rg.addColorStop(0,'rgba(0,0,0,0)');
+      rg.addColorStop(1,'rgba(0,0,0,0.65)');
+      outCtx.globalCompositeOperation='multiply';
+      outCtx.fillStyle=rg; outCtx.fillRect(0,0,W,H);
+      outCtx.globalCompositeOperation='source-over';
+    }
+  }
+  // Watermark on top
+  outCtx.drawImage(wmCanvas, 0, 0);
+}
+
+function build2DFilter(s){
+  // CSS filter fallback for when WebGL isn't available
+  const t = s.lutI;
+  let br = 1 + s.expRaw/100*0.5;
+  let con = 1 + s.conRaw/100*0.5;
+  let sat = 1 + s.satRaw/100;
+  let hue = 0, sep = 0;
+  if(s.lut==='vintage'){ sat=sat*(1-t*0.45); sep=t*40; }
+  if(s.lut==='cold'){ hue=-18*t; }
+  if(s.lut==='warm'){ sep=t*32; }
+  if(s.lut==='bw'||s.lut==='noir'){ sat=sat*(1-t); if(s.lut==='noir') con*=(1+t*0.35); }
+  if(s.lut==='vibrant') sat*=(1+t*0.8);
+  if(s.lut==='anime') sat*=(1+t*1.1);
+  if(s.chips.includes('sharpen')) con*=1.1;
+  br=Math.max(0.1,br); con=Math.max(0.1,con); sat=Math.max(0,sat);
+  let f=`brightness(${br.toFixed(3)}) contrast(${con.toFixed(3)}) saturate(${sat.toFixed(3)})`;
+  if(sep>0) f+=` sepia(${sep.toFixed(1)}%)`;
+  if(hue!==0) f+=` hue-rotate(${hue.toFixed(1)}deg)`;
+  return f;
+}
+
+// ─── FINISH ───────────────────────────────────────────────────────
+function finish(blob){
+  setProgress('Done!', 100);
+  const url = URL.createObjectURL(blob);
+  if(videoEl.src&&videoEl.src.startsWith('blob:')) URL.revokeObjectURL(videoEl.src);
+  videoEl.src=url; videoEl.load();
+  document.getElementById('vidStatus').textContent='Processed ✓';
+  document.getElementById('vidStatus').className='vid-status vs-done';
+  document.getElementById('sizeText').textContent = fmtSize(blob.size);
+  document.getElementById('sizePill').classList.add('show');
+  const stem = curFile.name.replace(/\.[^.]+$/,'');
+  const ext  = mimeToExt(blob.type, getSettings().fmt);
+  const dlName = `${stem}_sv.${ext}`;
+  const dl = document.getElementById('dlBtn');
+  dl.href=url; dl.download=dlName;
+  Array.from(dl.childNodes).forEach(n=>{ if(n.nodeType===3) n.textContent=` ${dlName}`; });
+  dl.classList.add('show');
+  document.getElementById('pbTitle').textContent='🎉 Done!';
+  document.getElementById('pbSub').textContent=`${dlName} · ${fmtSize(blob.size)} — click Download to save`;
+  toast('🎉 Processing complete!','ok');
+  setTimeout(()=>document.getElementById('progWrap').classList.remove('show'), 3500);
+}
+
+// ─── SETTINGS ─────────────────────────────────────────────────────
+function getSettings(){
+  const lut = document.getElementById('selLut').value;
+  return {
+    fmt:       document.getElementById('selFmt').value,
+    res:       (()=>{
+      const r = document.getElementById('selRes').value;
+      if(r === '3840x2160' && !isPro()){
+        toast('🔒 4K requires Pro — upgrade to unlock','err');
+        document.getElementById('selRes').value = '1920x1080';
+        document.getElementById('selRes').dispatchEvent(new Event('input'));
+        return '1920x1080';
+      }
+      return r;
+    })(),
+    lut,
+    lutIdx:    LUT_IDX[lut] || 0,
+    lutI:      parseInt(document.getElementById('rCC').value) / 100,
+    speed:     parseInt(document.getElementById('rSpeed').value) / 100,
+    bitrate:   (()=>{
+      const br = parseInt(document.getElementById('rBR').value);
+      if(br > 20 && !isPro()){
+        toast('🔒 Bitrate above 20 Mbps requires Pro','err');
+        document.getElementById('rBR').value = '20';
+        document.getElementById('rBR').dispatchEvent(new Event('input'));
+        return 20 * 1_000_000;
+      }
+      return br * 1_000_000;
+    })(),
+    // Raw -100..+100 ints — shader converts to final ranges internally
+    expRaw:    parseInt(document.getElementById('rExp').value),
+    conRaw:    parseInt(document.getElementById('rCon').value),
+    satRaw:    parseInt(document.getElementById('rSat').value),
+    shadRaw:   parseInt(document.getElementById('rShad').value),
+    highRaw:   parseInt(document.getElementById('rHigh').value),
+    keepAudio: document.getElementById('togAudio').classList.contains('on'),
+    boostAudio:document.getElementById('togBoost').classList.contains('on'),
+    chips:     [...document.querySelectorAll('.chip.on')].map(c=>c.dataset.v),
+  };
+}
+
+function pickMime(fmt){
+  if(fmt==='mp4'){
+    const mp4=['video/mp4;codecs=avc1.42E01E,mp4a.40.2','video/mp4;codecs=avc1,mp4a.40.2','video/mp4;codecs=avc1','video/mp4'];
+    for(const t of mp4) if(MediaRecorder.isTypeSupported(t)) return t;
+  }
+  if(fmt==='webm-vp9'){
+    const vp9=['video/webm;codecs=vp9,opus','video/webm;codecs=vp9'];
+    for(const t of vp9) if(MediaRecorder.isTypeSupported(t)) return t;
+  }
+  const webm=['video/webm;codecs=vp8,opus','video/webm;codecs=vp8','video/webm'];
+  for(const t of webm) if(MediaRecorder.isTypeSupported(t)) return t;
+  return '';
+}
+function mimeToExt(mimeType, requestedFmt){
+  if(mimeType.includes('mp4') || requestedFmt==='mp4') return 'mp4';
+  return 'webm';
+}
+function setProgress(l,p){
+  document.getElementById('progLbl').textContent=l;
+  document.getElementById('progPct').textContent=p+'%';
+  document.getElementById('progFill').style.width=p+'%';
+}
+function fmtDur(s){
+  if(!s||isNaN(s)) return '—';
+  const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sc=Math.floor(s%60);
+  return h?`${h}:${p2(m)}:${p2(sc)}`:`${m}:${p2(sc)}`;
+}
+function fmtSize(b){
+  if(b<1024) return b+' B';
+  if(b<1<<20) return (b/1024).toFixed(1)+' KB';
+  if(b<1<<30) return (b/(1<<20)).toFixed(1)+' MB';
+  return (b/(1<<30)).toFixed(2)+' GB';
+}
+function p2(n){ return String(n).padStart(2,'0'); }
+function toast(msg, type=''){
+  const pile=document.getElementById('toastPile');
+  const el=document.createElement('div');
+  el.className=`toast ${type}`; el.textContent=msg; pile.appendChild(el);
+  setTimeout(()=>{
+    el.style.opacity='0'; el.style.transform='translateY(10px)';
+    el.style.transition='all .3s';
+    setTimeout(()=>el.remove(), 320);
+  }, 3500);
+}
+</script>
+</body>
+</html>
