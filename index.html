@@ -1227,36 +1227,30 @@ function startProcess(){
 }
 
 async function pipeline(s){
-  // ── FRAME-BY-FRAME PIPELINE ──────────────────────────────────────
-  // Instead of playing the video in real-time and hoping every frame
-  // gets captured, we seek to each exact frame, render it with WebGL,
-  // push it to the MediaRecorder, then move on. Zero dropped frames.
-  // Audio is played separately in real-time sync.
+  // ── CLEAN REAL-TIME PIPELINE ─────────────────────────────────────
+  // Play at normal speed. WebGL renders each frame as it arrives.
+  // Key insight: captureStream(0) lets the browser decide frame timing
+  // naturally — no artificial FPS cap that causes stutters. The canvas
+  // just sends a new frame whenever we draw one.
 
-  // ── Load source video ──
   const vid = document.createElement('video');
   vid.src = URL.createObjectURL(curFile);
   vid.playsInline = true;
+  vid.playbackRate = s.speed;
   vid.preload = 'auto';
-  vid.muted = true; // muted for seeking — audio handled separately
 
   await new Promise((res,rej)=>{
-    vid.onloadedmetadata = res;
+    vid.oncanplaythrough = res;
     vid.onerror = ()=>rej(new Error('Failed to load video'));
     vid.load();
   });
 
-  const srcW    = vid.videoWidth  || 1280;
-  const srcH    = vid.videoHeight || 720;
+  const srcW     = vid.videoWidth  || 1280;
+  const srcH     = vid.videoHeight || 720;
   const duration = vid.duration;
+  const outDur   = duration / s.speed;
 
-  // Detect native frame rate from video (default 30fps if unknown)
-  // We'll use 30fps for the output — smooth and universally compatible
-  const FPS      = 30;
-  const FRAME_DT = 1 / FPS;
-  const totalFrames = Math.ceil(duration / FRAME_DT / s.speed);
-
-  // ── Canvas size ──
+  // ── Output size ──
   let W=srcW, H=srcH;
   if(s.res !== 'src'){
     const [rw,rh] = s.res.split('x').map(Number);
@@ -1267,123 +1261,125 @@ async function pipeline(s){
   W = W%2 ? W-1 : W;
   H = H%2 ? H-1 : H;
 
-  // ── Init WebGL ──
-  const glOk = initGL(W, H);
-  const out   = document.createElement('canvas');
+  // ── WebGL + canvas ──
+  const glOk   = initGL(W, H);
+  const out    = document.createElement('canvas');
   out.width=W; out.height=H;
   const outCtx = out.getContext('2d');
   buildWatermark(W, H);
 
-  // ── Set up MediaRecorder capturing output canvas at exact FPS ──
-  const stream  = out.captureStream(FPS);
-  const mime    = pickMime(s.fmt);
+  // ── WebAudio ──
+  const actx = new (window.AudioContext || window.webkitAudioContext)();
+  await actx.resume();
+  const aSrc = actx.createMediaElementSource(vid);
+  const gain = actx.createGain();
+  gain.gain.value = s.keepAudio ? (s.boostAudio ? 1.5 : 1.0) : 0.00001;
+  const aDest = actx.createMediaStreamDestination();
+  aSrc.connect(gain);
+  gain.connect(aDest);
+  gain.connect(actx.destination);
+
+  // ── Stream + recorder ──
+  // captureStream(0) = variable framerate — browser sends a frame
+  // every time we call drawImage(), no duplicates, no drops.
+  const stream = out.captureStream(0);
+  const aTrk   = aDest.stream.getAudioTracks()[0];
+  if(aTrk) stream.addTrack(aTrk);
+
+  const mime = pickMime(s.fmt);
   let rec;
-  try      { rec = new MediaRecorder(stream, {mimeType:mime, videoBitsPerSecond:s.bitrate}); }
+  try      { rec = new MediaRecorder(stream, {mimeType:mime, videoBitsPerSecond:s.bitrate, audioBitsPerSecond:192000}); }
   catch(e1){ try{ rec = new MediaRecorder(stream, {videoBitsPerSecond:s.bitrate}); }
              catch(e2){ rec = new MediaRecorder(stream); } }
 
-  const chunks = [];
+  const chunks  = [];
+  let   stopped = false;
+
   rec.ondataavailable = e => { if(e.data&&e.data.size>0) chunks.push(e.data); };
+  rec.onerror = ()=>{ if(!stopped){ stopped=true; reject(new Error('Recorder error')); } };
 
-  // ── Helper: seek video to exact time and wait for frame to decode ──
-  function seekTo(t){
-    return new Promise(res => {
-      const target = Math.min(t, duration - 0.001);
-      if(Math.abs(vid.currentTime - target) < 0.0005){ res(); return; }
-      const onSeeked = ()=>{ vid.removeEventListener('seeked', onSeeked); res(); };
-      vid.addEventListener('seeked', onSeeked);
-      vid.currentTime = target;
-    });
-  }
+  // ── Render loop ──
+  // requestVideoFrameCallback fires exactly when the video has a new frame
+  // ready — this is the key API that prevents duplicate/dropped frames.
+  // Falls back to requestAnimationFrame if not supported.
 
-  // ── Phase 1: render every frame into the canvas stream ──────────
-  // Prime the canvas with frame 0 before starting recorder
-  setProgress('Preparing frames…', 1);
-  await seekTo(0);
-  renderFrame(outCtx, vid, s, 0, W, H, glOk, 0, duration);
-  await new Promise(res => requestAnimationFrame(res));
-  await new Promise(res => requestAnimationFrame(res));
-
-  rec.start(); // no timeslice = clean timestamps
-  await new Promise(res => setTimeout(res, 60));
-
-  // Render each frame one by one
-  for(let i = 0; i < totalFrames; i++){
-    const sourceTime = (i * FRAME_DT * s.speed); // time in original video
-    const outputTime = (i * FRAME_DT);            // time in output video
-
-    await seekTo(sourceTime);
-
-    // Render this frame through WebGL with all effects applied
-    renderFrame(outCtx, vid, s, outputTime * 1000, W, H, glOk, outputTime, duration / s.speed);
-
-    // Let the browser breathe every 8 frames — keeps UI responsive
-    // and gives the encoder time to process without backing up
-    if(i % 8 === 0){
-      await new Promise(res => requestAnimationFrame(res));
-    }
-
-    const pct = Math.round((i / totalFrames) * 90) + 3;
-    setProgress(`Frame ${i+1} / ${totalFrames}`, pct);
-  }
-
-  // ── Phase 2: mux audio in real-time ─────────────────────────────
-  // Now that we have all video frames encoded, play the audio track
-  // and capture it. We do this by playing the video (muted visually,
-  // audio routed to recorder) at the correct speed.
-  setProgress('Adding audio…', 92);
-
-  if(s.keepAudio){
-    const audVid = document.createElement('video');
-    audVid.src = URL.createObjectURL(curFile);
-    audVid.playsInline = true;
-    audVid.playbackRate = s.speed;
-    audVid.muted = false;
-
-    const actx  = new (window.AudioContext || window.webkitAudioContext)();
-    await actx.resume();
-    const aSrc  = actx.createMediaElementSource(audVid);
-    const gain  = actx.createGain();
-    gain.gain.value = s.boostAudio ? 1.5 : 1.0;
-    const aDest = actx.createMediaStreamDestination();
-    aSrc.connect(gain);
-    gain.connect(aDest);
-    gain.connect(actx.destination);
-
-    // Add audio track to the stream BEFORE playback starts
-    const aTrk = aDest.stream.getAudioTracks()[0];
-    if(aTrk) stream.addTrack(aTrk);
-
-    // Play audio to end
-    await new Promise((res, rej) => {
-      audVid.onended = res;
-      audVid.onerror = rej;
-      // Hold the last video frame visible while audio plays
-      audVid.play().catch(rej);
-    });
-
-    actx.close();
-    URL.revokeObjectURL(audVid.src);
-  }
-
-  // ── Finish ──────────────────────────────────────────────────────
-  setProgress('Finalising…', 98);
-
-  await new Promise(res => {
-    if(rec.state === 'recording'){
-      rec.requestData();
-      setTimeout(res, 600);
-    } else { res(); }
-  });
+  const useRVFC = typeof vid.requestVideoFrameCallback === 'function';
 
   return new Promise((resolve, reject) => {
+
     rec.onstop = () => {
+      if(stopped) return; stopped=true;
+      actx.close();
       URL.revokeObjectURL(vid.src);
-      resolve(new Blob(chunks, {type: rec.mimeType || mime || 'video/webm'}));
+      resolve(new Blob(chunks, {type: rec.mimeType||mime||'video/webm'}));
     };
-    rec.onerror = () => reject(new Error('Recorder error'));
-    if(rec.state === 'recording') rec.stop();
-    else rec.onstop();
+
+    function renderAndSchedule(now, metadata){
+      if(stopped) return;
+
+      const ct = vid.currentTime;
+      const ot = ct / s.speed; // output time
+
+      // Done?
+      if(vid.ended || ct >= duration - 0.001){
+        renderFrame(outCtx, vid, s, now, W, H, glOk, outDur, outDur);
+        vid.pause();
+        if(rec.state==='recording'){
+          rec.requestData();
+          setTimeout(()=>{ if(rec.state==='recording') rec.stop(); }, 800);
+        }
+        setProgress('Finalising…', 99);
+        return;
+      }
+
+      // Render this exact video frame
+      renderFrame(outCtx, vid, s, now, W, H, glOk, ot, outDur);
+
+      const pct = Math.min(Math.round((ct/duration)*95)+3, 97);
+      setProgress(`${fmtDur(ot)} / ${fmtDur(outDur)}`, pct);
+
+      // Schedule next frame
+      if(useRVFC){
+        vid.requestVideoFrameCallback(renderAndSchedule);
+      } else {
+        requestAnimationFrame(renderAndSchedule);
+      }
+    }
+
+    // ── Watchdog ──
+    const wd = setTimeout(()=>{
+      if(rec.state==='recording'){ rec.requestData(); setTimeout(()=>rec.stop(),300); }
+    }, outDur * 2000 + 30000);
+    const origStop = rec.onstop;
+    rec.onstop = e=>{ clearTimeout(wd); if(origStop) origStop(e); };
+
+    // ── Prime canvas ──
+    setProgress('Preparing…', 2);
+    vid.currentTime = 0;
+
+    const doStart = () => {
+      renderFrame(outCtx, vid, s, 0, W, H, glOk, 0, outDur);
+
+      requestAnimationFrame(()=>requestAnimationFrame(()=>{
+        rec.start(); // no timeslice
+        setTimeout(()=>{
+          vid.play()
+            .then(()=>{
+              if(useRVFC){
+                vid.requestVideoFrameCallback(renderAndSchedule);
+              } else {
+                requestAnimationFrame(renderAndSchedule);
+              }
+            })
+            .catch(err=>{ if(rec.state==='recording') rec.stop(); reject(err); });
+        }, 80);
+      }));
+    };
+
+    const onSeeked = ()=>{ vid.removeEventListener('seeked', onSeeked); doStart(); };
+    vid.addEventListener('seeked', onSeeked);
+    // Fallback if seeked already fired
+    setTimeout(()=>{ if(vid.currentTime < 0.01) doStart(); }, 500);
   });
 }
 
