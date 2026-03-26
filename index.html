@@ -1227,12 +1227,12 @@ function startProcess(){
 }
 
 async function pipeline(s){
+  // ── Video element ──────────────────────────────────────────────
   const vid = document.createElement('video');
   vid.src = URL.createObjectURL(curFile);
   vid.playsInline = true;
   vid.playbackRate = s.speed;
   vid.preload = 'auto';
-  // NOT muted — audio routed from this element
 
   await new Promise((res,rej)=>{
     vid.oncanplaythrough = res;
@@ -1245,6 +1245,7 @@ async function pipeline(s){
   const duration = vid.duration;
   const outDur   = duration / s.speed;
 
+  // ── Output size ────────────────────────────────────────────────
   let W=srcW, H=srcH;
   if(s.res !== 'src'){
     const [rw,rh] = s.res.split('x').map(Number);
@@ -1255,13 +1256,14 @@ async function pipeline(s){
   W = W%2 ? W-1 : W;
   H = H%2 ? H-1 : H;
 
+  // ── WebGL + canvas ─────────────────────────────────────────────
   const glOk   = initGL(W, H);
   const out    = document.createElement('canvas');
   out.width=W; out.height=H;
   const outCtx = out.getContext('2d');
   buildWatermark(W, H);
 
-  // Audio via WebAudio from the same video element
+  // ── WebAudio ───────────────────────────────────────────────────
   const actx = new (window.AudioContext || window.webkitAudioContext)();
   await actx.resume();
   const aSrc = actx.createMediaElementSource(vid);
@@ -1272,7 +1274,7 @@ async function pipeline(s){
   gain.connect(aDest);
   gain.connect(actx.destination);
 
-  // Fixed 30fps stream — most reliable across all browsers
+  // ── MediaRecorder ──────────────────────────────────────────────
   const stream = out.captureStream(30);
   const aTrk   = aDest.stream.getAudioTracks()[0];
   if(aTrk) stream.addTrack(aTrk);
@@ -1287,13 +1289,17 @@ async function pipeline(s){
   rec.ondataavailable = e => { if(e.data&&e.data.size>0) chunks.push(e.data); };
 
   return new Promise((resolve, reject) => {
-    let finished = false;
+    // ── State flags ────────────────────────────────────────────────
+    let finished  = false;  // set when we decide to stop
+    let started   = false;  // set after doStart() runs — prevents double-start
+    let watchdog  = null;
 
-    // Called once when playback is truly done
+    // ── finish() — called exactly once to stop everything ──────────
     function finish(){
       if(finished) return;
       finished = true;
       vid.pause();
+      clearTimeout(watchdog);
       setProgress('Finalising…', 99);
       if(rec.state === 'recording'){
         rec.requestData();
@@ -1301,74 +1307,82 @@ async function pipeline(s){
       }
     }
 
+    // ── rec.onstop — called by MediaRecorder when it fully stops ───
     rec.onstop = ()=>{
-      clearTimeout(wd);
       actx.close();
       URL.revokeObjectURL(vid.src);
       resolve(new Blob(chunks, {type: rec.mimeType||mime||'video/webm'}));
     };
     rec.onerror = ()=> reject(new Error('Recorder error'));
 
-    // Watchdog — fires if something hangs
-    const wd = setTimeout(finish, outDur * 2000 + 20000);
+    // ── End detection — three independent triggers ─────────────────
+    // 1. ended event — fires when playback reaches the end
+    vid.addEventListener('ended', ()=> finish());
 
-    // ── Render loop via rAF ──────────────────────────────────────
-    // Simple rAF loop — draw every animation frame while playing.
-    // Keeps the canvas warm so captureStream(30) always has fresh data.
-    let lastTime = -1;
-    function loop(now){
-      if(finished) return;
-      const ct = vid.currentTime;
-      // Only re-render when the video has a new frame
-      if(ct !== lastTime){
-        lastTime = ct;
-        renderFrame(outCtx, vid, s, now, W, H, glOk, ct / s.speed, outDur);
-      }
-      const pct = Math.min(Math.round((ct/duration)*94)+3, 97);
-      setProgress(`${fmtDur(ct/s.speed)} / ${fmtDur(outDur)}`, pct);
-      requestAnimationFrame(loop);
-    }
-
-    // ── Reliable end detection ────────────────────────────────────
-    // Use BOTH ended event AND a timeupdate safety check
-    vid.addEventListener('ended', finish);
+    // 2. timeupdate — fires ~4 times/sec; catch the last frames
+    //    threshold: 2 frames before end, scaled for playback speed
     vid.addEventListener('timeupdate', ()=>{
-      // Finish when within one frame of the end
-      if(!finished && vid.currentTime >= duration - (1/30 * s.speed * 2)){
+      if(!finished && vid.currentTime >= duration - (0.5 * s.speed)){
         finish();
       }
     });
 
-    // ── Start sequence ───────────────────────────────────────────
-    setProgress('Preparing…', 2);
+    // 3. Watchdog — absolute backstop; set AFTER we know outDur
+    //    2× video duration + 30s grace period
+    watchdog = setTimeout(()=>{
+      console.warn('SmartVideo watchdog fired at', vid.currentTime, '/', duration);
+      finish();
+    }, outDur * 2000 + 30000);
 
+    // ── Render loop ────────────────────────────────────────────────
+    let lastRenderTime = -1;
+    function loop(now){
+      if(finished) return; // stop the loop the moment finish() is called
+      const ct = vid.currentTime;
+      if(ct !== lastRenderTime){
+        lastRenderTime = ct;
+        renderFrame(outCtx, vid, s, now, W, H, glOk, ct / s.speed, outDur);
+      }
+      const pct = Math.min(Math.round((ct / duration) * 94) + 3, 97);
+      setProgress(fmtDur(ct / s.speed) + ' / ' + fmtDur(outDur), pct);
+      requestAnimationFrame(loop);
+    }
+
+    // ── doStart() — prime canvas and begin recording ───────────────
     function doStart(){
-      // Draw first real frame so canvas is never blank before rec starts
+      if(started) return; // guard against double-call
+      started = true;
+
+      // Draw frame 0 so canvas is never blank when recorder starts
       renderFrame(outCtx, vid, s, 0, W, H, glOk, 0, outDur);
 
-      // Two rAF ticks to let captureStream register the frame
+      // Two rAF ticks so captureStream registers the first frame
       requestAnimationFrame(()=>requestAnimationFrame(()=>{
-        rec.start(); // no timeslice = clean timestamps
-        // 80ms settle before playback begins
+        rec.start(); // no timeslice — cleanest timestamps
         setTimeout(()=>{
           vid.play()
             .then(()=> requestAnimationFrame(loop))
-            .catch(reject);
+            .catch(err=> reject(err));
         }, 80);
       }));
     }
 
-    // Seek to 0 and wait for it to settle
-    vid.currentTime = 0;
-    const onSeeked = ()=>{
-      vid.removeEventListener('seeked', onSeeked);
+    // ── Seek to frame 0 then start ─────────────────────────────────
+    // seeked fires when vid.currentTime is set and the frame is decoded.
+    // We remove the listener immediately so it can't fire twice.
+    setProgress('Preparing…', 2);
+    const onFirstSeeked = ()=>{
+      vid.removeEventListener('seeked', onFirstSeeked);
       doStart();
     };
-    vid.addEventListener('seeked', onSeeked);
-    // Fallback if seeked already fired or takes too long
-    setTimeout(()=>{ if(!finished && rec.state === 'inactive') doStart(); }, 400);
+    vid.addEventListener('seeked', onFirstSeeked);
+    vid.currentTime = 0;
+
+    // Fallback: if seeked never fires (already at 0), start after 500ms
+    setTimeout(()=>{ if(!started) doStart(); }, 500);
   });
 }
+
 
 function renderFrame(outCtx, vid, s, now, W, H, glOk, currentTime, duration){
   if(glOk){
